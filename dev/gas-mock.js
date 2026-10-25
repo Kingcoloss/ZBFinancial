@@ -15,6 +15,17 @@ const crypto = require('node:crypto');
 
 const SRC = path.join(__dirname, '..', 'src');
 
+const readHtml = (name) => fs.readFileSync(path.join(SRC, `${name}.html`), 'utf8');
+
+/** What HtmlService hands back: the content plus the chainable setters doGet uses. */
+function htmlOutput(content) {
+  const out = { title: '', meta: {}, content: String(content) };
+  out.setTitle = (t) => { out.title = t; return out; };
+  out.addMetaTag = (k, v) => { out.meta[k] = v; return out; };
+  out.getContent = () => out.content;
+  return out;
+}
+
 class MockRange {
   constructor(sheet, row, col, rows, cols) {
     const inside = row >= 1 && col >= 1 && rows >= 1 && cols >= 1 &&
@@ -130,6 +141,7 @@ class MockSpreadsheet {
   }
 
   getId() { return this.id; }
+  getName() { return this.title; }
   getUrl() { return `https://docs.google.com/spreadsheets/d/${this.id}/edit`; }
   getSheets() { return this.sheets.slice(); }
   getSheetByName(name) { return this.sheets.find((s) => s.name === name) || null; }
@@ -218,16 +230,12 @@ function createGas(options = {}) {
       flush: () => {}
     },
     HtmlService: {
-      createHtmlOutputFromFile: (name) => ({ getContent: () => fs.readFileSync(path.join(SRC, `${name}.html`), 'utf8') }),
+      createHtmlOutput: (html) => htmlOutput(html),
+      createHtmlOutputFromFile: (name) => htmlOutput(readHtml(name)),
       createTemplateFromFile: (name) => ({
         evaluate: () => {
-          const render = (n) => fs.readFileSync(path.join(SRC, `${n}.html`), 'utf8')
-            .replace(/<\?!= include_\('(\w+)'\) \?>/g, (_, inc) => render(inc));
-          const out = { title: '', meta: {}, content: render(name) };
-          out.setTitle = (t) => { out.title = t; return out; };
-          out.addMetaTag = (k, v) => { out.meta[k] = v; return out; };
-          out.getContent = () => out.content;
-          return out;
+          // Like the real thing, each scriptlet calls the script's own include_ (so a missing file throws).
+          return htmlOutput(readHtml(name).replace(/<\?!= include_\('(\w+)'\) \?>/g, (_, inc) => sandbox.include_(inc)));
         }
       })
     }

@@ -1,0 +1,281 @@
+<script>
+/* Views: header, menus (top pills on wide screens, bottom tabs on narrow ones) and the six modules. */
+(function () {
+  'use strict';
+  const ZB = window.ZB;
+  const { S, el, icon, baht, short, fmtDate, monthLabel, clock, ROLE, KIND } = ZB;
+
+  const NAV = [
+    ['dash', 'ภาพรวม'],
+    ['items', 'รายการ'],
+    ['types', 'ประเภท'],
+    ['cats', 'หมวดหมู่'],
+    ['users', 'ผู้ใช้'],
+    ['fams', 'ครอบครัว']
+  ];
+  const MORE = ['types', 'users', 'fams'];
+  const EN = { EXPENSE: 'Expense', INCOME: 'Income' };
+
+  function go(tab) {
+    S.tab = tab;
+    S.more = false;
+    ZB.render();
+    window.scrollTo(0, 0);
+    const main = document.getElementById('main');
+    if (main) main.focus({ preventScroll: true });
+  }
+
+  function setMonth(month) {
+    S.view.month = month;
+    ZB.call('state', {}).catch((e) => ZB.toast(e.message, true));
+  }
+
+  /* ---- shell ---- */
+
+  function render() {
+    const root = document.getElementById('root');
+    if (S.fatal) return renderFatal(root);
+    if (!S.data) return;
+    const d = S.data;
+    const fam = d.family;
+    const label = fam ? fam.name + ' · ' + monthLabel(d.meta.month) : null;
+
+    const header = el('header', { class: 'hdr' },
+      el('div', { class: 'brand' }, 'ZBFinancial'),
+      fam && el('nav', { class: 'topnav', 'aria-label': 'โมดูล' },
+        NAV.map(([key, text]) => el('button', { class: 'pill', 'aria-current': S.tab === key ? 'page' : null, onClick: () => go(key) }, text))),
+      fam && el('button', { class: 'fam', 'data-fk': 'view', 'aria-haspopup': 'dialog', 'aria-label': 'ครอบครัวและเดือนที่แสดง: ' + label + ' (กดเพื่อเปลี่ยน)', onClick: () => ZB.forms.openView() },
+        el('span', {}, label), icon('down', 16)));
+
+    const main = el('main', { class: 'main', id: 'main', tabindex: '-1' }, fam ? page(d) : onboarding());
+
+    root.replaceChildren(
+      el('a', { class: 'skip', href: '#main', onClick: (e) => { e.preventDefault(); main.focus(); } }, 'ข้ามไปยังเนื้อหา'),
+      header, main, fam && tabbar(fam)
+    );
+  }
+
+  function tabbar(fam) {
+    const tab = (key, text, ic) => el('button', { class: 'tab', 'aria-current': S.tab === key ? 'page' : null, onClick: () => go(key) }, icon(ic), text);
+    const inMore = MORE.indexOf(S.tab) >= 0;
+    return el('div', { class: 'tabbar' },
+      S.more && el('div', { class: 'more' },
+        MORE.map((key) => el('button', { 'aria-current': S.tab === key ? 'page' : null, onClick: () => go(key) }, NAV.find((n) => n[0] === key)[1]))),
+      el('nav', { class: 'tabs', 'aria-label': 'เมนูหลัก' },
+        tab('dash', 'ภาพรวม', 'chart'),
+        tab('items', 'รายการ', 'list'),
+        fam.can.addItem && el('button', { class: 'fab', 'data-fk': 'add', 'aria-label': 'เพิ่มรายการ', onClick: () => ZB.forms.add('items') }, icon('plus', 24, '#FFFFFF')),
+        tab('cats', 'หมวดหมู่', 'grid'),
+        el('button', {
+          class: 'tab', 'aria-expanded': String(S.more), 'aria-current': inMore && !S.more ? 'page' : null,
+          onClick: () => { S.more = !S.more; ZB.render(); }
+        }, icon('dots'), 'เพิ่มเติม')));
+  }
+
+  function renderFatal(root) {
+    const f = S.fatal;
+    root.replaceChildren(el('main', { class: 'fatal', id: 'main' },
+      el('h1', {}, f.title),
+      el('p', {}, f.message),
+      el('button', { class: 'btn', onClick: () => ZB.boot() }, 'ลองอีกครั้ง')));
+  }
+
+  function onboarding() {
+    return el('section', { class: 'card empty' },
+      el('h1', {}, 'ยินดีต้อนรับสู่ ZBFinancial'),
+      el('p', {}, 'เริ่มจากสร้างครอบครัวแรกของคุณ ระบบจะเตรียมหมวดหมู่รายรับรายจ่ายพื้นฐานให้ แล้วชวนคนในบ้านมาบันทึกด้วยกันได้ทันที'),
+      el('button', { class: 'btn', onClick: () => ZB.forms.add('fams') }, '+ สร้างครอบครัว'));
+  }
+
+  /* ---- shared pieces ---- */
+
+  function stepper() {
+    const months = S.data.meta.months;
+    const i = months.findIndex((m) => m.value === S.data.meta.month);
+    const older = months[i + 1];
+    const newer = months[i - 1];
+    return el('div', { class: 'stepper', role: 'group', 'aria-label': 'เปลี่ยนเดือน' },
+      el('button', { 'aria-label': 'เดือนก่อนหน้า', disabled: !older, onClick: () => setMonth(older.value) }, icon('left', 20)),
+      el('b', { 'aria-live': 'polite' }, monthLabel(S.data.meta.month)),
+      el('button', { 'aria-label': 'เดือนถัดไป', disabled: !newer, onClick: () => setMonth(newer.value) }, icon('right', 20)));
+  }
+
+  function bar(row, cls, showShare) {
+    return el('div', { class: 'bar' },
+      el('div', { class: 'bar-t' },
+        el('span', {}, row.name, showShare && el('small', {}, row.share + '%')),
+        el('span', {}, baht(row.amount))),
+      el('div', { class: 'track', 'aria-hidden': 'true' }, el('div', { class: 'fill ' + (cls || ''), style: { width: row.pct + '%' } })));
+  }
+
+  function itemTitle(i) {
+    return { title: i.name, sub: i.categoryName + ' · ' + i.ownerName + ' · ' + fmtDate(i.date) };
+  }
+
+  function rowView(r) {
+    return el('div', { class: 'item' + (r.current ? ' cur' : ''), 'aria-current': r.current ? 'true' : null },
+      el('div', { class: 't' }, el('b', {}, r.title), el('small', {}, r.sub)),
+      r.tag && el('span', { class: 'tag ' + (r.tagCls || '') }, r.tag),
+      r.amt !== undefined && el('span', { class: 'amt ' + (r.amtCls || '') }, r.amt),
+      r.actions && r.actions.length > 0 && el('span', { class: 'acts' },
+        r.actions.map((a) => el('button', { class: 'act ' + (a.cls || ''), 'data-fk': a.label + ':' + r.id, 'aria-label': a.label + ' ' + r.title, onClick: a.run }, a.label))));
+  }
+
+  /* ---- dashboard ---- */
+
+  function dashboard(d) {
+    const f = d.family;
+    const db = f.dashboard;
+    const when = db.isCurrentMonth ? 'เดือนนี้' : 'เดือน ' + monthLabel(db.month);
+    const recent = f.items.slice(0, 5);
+
+    return [
+      el('div', { class: 'page-h' },
+        el('div', {}, el('h1', {}, 'ภาพรวม' + when), el('p', { class: 'lead' }, db.insight.text)),
+        el('div', { class: 'tools' }, stepper())),
+      el('div', { class: 'kpis' },
+        kpi('รายรับ', db.income, 'var(--income)'),
+        kpi('รายจ่าย', db.expense, 'var(--expense)'),
+        kpi('คงเหลือ', db.balance, db.balance < 0 ? 'var(--danger)' : 'var(--accent)')),
+      el('div', { class: 'row-cards' },
+        el('section', { class: 'card card-p' },
+          el('h2', {}, 'รายจ่ายตามหมวด'),
+          db.byCategory.length ? db.byCategory.map((r) => bar(r, '', true)) : el('p', { class: 'lead' }, 'ยังไม่มีรายจ่ายในเดือนนี้')),
+        el('section', { class: 'card card-p' },
+          el('h2', {}, 'รายจ่ายแยกตามคน'),
+          db.byPerson.length ? db.byPerson.map((r) => bar(r, 'alt', true)) : el('p', { class: 'lead' }, 'ยังไม่มีรายจ่ายในเดือนนี้')),
+        el('section', { class: 'card card-p' },
+          el('h2', {}, 'แนวโน้มรายจ่าย 6 เดือน'),
+          trend(db.trend))),
+      el('section', { class: 'card list recent' },
+        el('h2', {}, 'รายการล่าสุด'),
+        recent.length
+          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls })))
+          : emptyBlock('ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย', f.can.addItem && { label: '+ เพิ่มรายการ', run: () => ZB.forms.add('items') }),
+        recent.length > 0 && el('div', { class: 'empty', style: { padding: '8px' } },
+          el('button', { class: 'act', onClick: () => go('items') }, 'ดูรายการทั้งหมด'))),
+      sourceNote(d)
+    ];
+  }
+
+  function kpi(label, value, color) {
+    return el('div', { class: 'card kpi' }, el('div', { class: 'l' }, label), el('div', { class: 'v', style: { color: color } }, baht(value)));
+  }
+
+  function trend(rows) {
+    const text = rows.map((r) => monthLabel(r.month) + ' ' + baht(r.expense) + ' บาท').join(', ');
+    return el('div', { class: 'trend', role: 'img', 'aria-label': 'รายจ่าย 6 เดือน: ' + text },
+      rows.map((r) => el('div', {},
+        el('span', { class: 'tv', title: baht(r.expense) + ' บาท' }, r.expense > 0 ? short(r.expense) : ''),
+        el('div', { class: 'col' + (r.current ? ' now' : ''), style: { height: r.pct * 0.72 + '%' } }),
+        el('small', {}, r.label))));
+  }
+
+  function sourceNote(d) {
+    return el('p', { class: 'note' },
+      el('span', {}, 'ข้อมูลทั้งหมดดึงจาก Google Sheet ของครอบครัว · โหลดเมื่อ ' + clock(d.meta.syncedAt) + ' น.'),
+      d.meta.sheetUrl && el('a', { href: d.meta.sheetUrl, target: '_blank', rel: 'noopener noreferrer' }, 'เปิดดูข้อมูลดิบใน Google Sheet'));
+  }
+
+  function emptyBlock(text, action) {
+    return el('div', { class: 'empty' }, el('p', {}, text), action && el('button', { class: 'btn', onClick: action.run }, action.label));
+  }
+
+  /* ---- list modules ---- */
+
+  function modules(d) {
+    const f = d.family;
+    const can = f.can;
+    const month = monthLabel(d.meta.month);
+    const edit = (tab, id) => ({ label: 'แก้ไข', run: () => ZB.forms.edit(tab, id) });
+    const del = (tab, id) => ({ label: 'ลบ', cls: 'del', run: () => ZB.forms.remove(tab, id) });
+
+    return {
+      items: {
+        title: 'รายการ (Items)',
+        hint: 'รายรับรายจ่ายแต่ละครั้ง มีเจ้าของเป็นผู้ใช้หนึ่งคน · แสดงเดือน ' + month + ' (' + f.items.length + ' รายการ)',
+        add: can.addItem && '+ เพิ่มรายการ',
+        empty: 'ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย',
+        rows: f.items.map((i) => Object.assign(itemTitle(i), {
+          id: i.id,
+          tag: KIND[i.kind].label, tagCls: KIND[i.kind].cls,
+          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls,
+          actions: i.canEdit ? [edit('items', i.id), del('items', i.id)] : []
+        }))
+      },
+      types: {
+        title: 'ประเภท (Type)',
+        hint: 'กำหนดว่ารายการเป็นรายรับหรือรายจ่าย',
+        add: can.manageStructure && '+ เพิ่มประเภท',
+        empty: 'ยังไม่มีประเภท เพิ่มรายรับและรายจ่ายเพื่อเริ่มบันทึก',
+        noMonth: true,
+        rows: f.types.map((t) => ({
+          id: t.id,
+          title: t.name + ' (' + EN[t.kind] + ')',
+          sub: KIND[t.kind].effect + ' · ' + t.categoryCount + ' หมวด',
+          tag: KIND[t.kind].label, tagCls: KIND[t.kind].cls,
+          actions: can.manageStructure ? [edit('types', t.id), del('types', t.id)] : []
+        }))
+      },
+      cats: {
+        title: 'หมวดหมู่ (Category)',
+        hint: 'ลบหมวดที่มีรายการ ระบบจะให้ย้ายรายการไปหมวดอื่นก่อน ข้อมูลไม่หาย',
+        add: can.manageStructure && '+ เพิ่มหมวดหมู่',
+        empty: 'ยังไม่มีหมวดหมู่ เพิ่มหมวดแรกเพื่อจัดกลุ่มรายการ',
+        rows: f.categories.map((c) => ({
+          id: c.id,
+          title: c.name,
+          sub: c.monthItems + ' รายการ' + (d.meta.month === d.meta.thisMonth ? 'เดือนนี้' : 'ใน ' + month),
+          tag: c.typeName, tagCls: KIND[c.kind].cls,
+          actions: can.manageStructure ? [edit('cats', c.id), del('cats', c.id)] : []
+        }))
+      },
+      users: {
+        title: 'ผู้ใช้ (User)',
+        hint: 'ผู้ใช้เป็นเจ้าของรายการ เข้าระบบด้วยบัญชี Google · ตัวเลขด้านขวาคือรายจ่ายของเดือน ' + month,
+        add: can.manageMembers && '+ เพิ่มผู้ใช้',
+        empty: 'ยังไม่มีผู้ใช้',
+        rows: f.members.map((m) => ({
+          id: m.userId,
+          title: m.name + (m.isMe ? ' (คุณ)' : ''),
+          sub: m.email,
+          tag: ROLE[m.role],
+          amt: baht(m.expense),
+          actions: [].concat(can.manageMembers || m.isMe ? [edit('users', m.userId)] : [], can.manageMembers && !m.isMe ? [del('users', m.userId)] : [])
+        }))
+      },
+      fams: {
+        title: 'ครอบครัว (Family)',
+        hint: 'หนึ่งครอบครัวมีหลายผู้ใช้ และผู้ใช้อยู่ได้หลายครอบครัว · ตัวเลขด้านขวาคือยอดคงเหลือของเดือน ' + month,
+        add: '+ สร้างครอบครัว',
+        empty: 'ยังไม่มีครอบครัว',
+        rows: d.families.map((x) => ({
+          id: x.id,
+          title: x.name,
+          sub: x.memberNames.join(' '),
+          tag: x.memberCount + ' คน',
+          amt: baht(x.balance),
+          current: x.id === f.id,
+          actions: [].concat(x.id === f.id ? [] : [{ label: 'เลือก', run: () => ZB.forms.switchFamily(x.id) }], x.role === 'admin' ? [edit('fams', x.id), del('fams', x.id)] : [])
+        }))
+      }
+    };
+  }
+
+  function page(d) {
+    if (S.tab === 'dash') return dashboard(d);
+    const m = modules(d)[S.tab];
+    return [
+      el('div', { class: 'page-h' },
+        el('div', {}, el('h1', {}, m.title), el('p', {}, m.hint)),
+        el('div', { class: 'tools' },
+          !m.noMonth && stepper(),
+          m.add && el('button', { class: 'btn', 'data-fk': 'add', onClick: () => ZB.forms.add(S.tab) }, m.add))),
+      el('section', { class: 'card list', 'aria-label': m.title },
+        m.rows.length ? m.rows.map(rowView) : emptyBlock(m.empty, m.add && { label: m.add, run: () => ZB.forms.add(S.tab) }))
+    ];
+  }
+
+  Object.assign(ZB, { render, go });
+})();
+</script>

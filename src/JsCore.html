@@ -1,0 +1,157 @@
+<script>
+/* Core: DOM helper, formatting, state, and the one call that talks to the server. */
+(function () {
+  'use strict';
+  const ZB = (window.ZB = window.ZB || {});
+
+  const MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  const ROLE = { admin: 'ผู้ดูแล', member: 'สมาชิก', viewer: 'ดูอย่างเดียว' };
+  const KIND = {
+    EXPENSE: { label: 'รายจ่าย', sign: '-', cls: 'exp', effect: 'ลดยอดคงเหลือ' },
+    INCOME: { label: 'รายรับ', sign: '+', cls: 'inc', effect: 'เพิ่มยอดคงเหลือ' }
+  };
+
+  /** el('div', { class: 'x', onClick: fn }, 'text', childNode, [more]) - text is never parsed as HTML. */
+  function el(tag, attrs, ...kids) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === 'class') node.className = v;
+      else if (k === 'text') node.textContent = v;
+      else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
+      else if (k.length > 2 && k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2).toLowerCase(), v);
+      else node.setAttribute(k, v === true ? '' : String(v));
+    }
+    const add = (kid) => {
+      if (kid === null || kid === undefined || kid === false) return;
+      if (Array.isArray(kid)) kid.forEach(add);
+      else node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    };
+    kids.forEach(add);
+    return node;
+  }
+
+  const ICONS = {
+    chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    dots: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    left: '<path d="M15 6l-6 6 6 6"/>',
+    right: '<path d="M9 6l6 6-6 6"/>',
+    down: '<path d="M6 9l6 6 6-6"/>'
+  };
+  /** Static, trusted SVG strings only. */
+  function icon(name, size, stroke) {
+    const s = size || 22;
+    const t = document.createElement('template');
+    t.innerHTML = '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="' + (stroke || 'currentColor') +
+      '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + ICONS[name] + '</svg>';
+    return t.content.firstChild;
+  }
+
+  /** 12345.5 -> 12,345.50 ; 1240 -> 1,240 */
+  function baht(n) {
+    const v = Math.round(Number(n || 0) * 100) / 100;
+    const parts = Math.abs(v).toFixed(2).split('.');
+    const int = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (v < 0 ? '-' : '') + (parts[1] === '00' ? int : int + '.' + parts[1]);
+  }
+  /** 17600 -> 17.6k, for places too narrow for the full number. */
+  function short(n) {
+    const v = Number(n || 0);
+    return v >= 1000 ? (Math.round(v / 100) / 10).toString() + 'k' : String(Math.round(v));
+  }
+  function fmtDate(iso) {
+    const p = String(iso).split('-');
+    return Number(p[2]) + ' ' + MONTHS[Number(p[1]) - 1];
+  }
+  function monthLabel(m) {
+    const p = String(m).split('-');
+    return MONTHS[Number(p[1]) - 1] + ' ' + (Number(p[0]) + 543);
+  }
+  function clock(iso) {
+    const d = new Date(iso);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  const S = {
+    data: null,
+    tab: 'dash',
+    more: false,
+    busy: 0,
+    fatal: null,
+    view: loadView()
+  };
+
+  function loadView() {
+    try {
+      const v = JSON.parse(localStorage.getItem('zb.view') || '{}');
+      return { familyId: typeof v.familyId === 'string' ? v.familyId : null, month: null };
+    } catch (e) {
+      return { familyId: null, month: null };
+    }
+  }
+  function saveView() {
+    try {
+      localStorage.setItem('zb.view', JSON.stringify({ familyId: S.view.familyId }));
+    } catch (e) { /* private mode: the app works without it */ }
+  }
+
+  class ApiError extends Error {
+    constructor(error) {
+      super(error.message);
+      this.code = error.code;
+      this.details = error.details || null;
+    }
+  }
+
+  function setBusy(delta) {
+    S.busy = Math.max(0, S.busy + delta);
+    const bar = document.getElementById('busy');
+    if (bar) bar.classList.toggle('on', S.busy > 0);
+  }
+
+  /** Calls the server. Resolves with { result, state } and re-renders; rejects with ApiError. */
+  function call(action, payload) {
+    return new Promise((resolve, reject) => {
+      setBusy(1);
+      google.script.run
+        .withSuccessHandler((res) => {
+          setBusy(-1);
+          if (res && res.ok) {
+            applyState(res.data.state);
+            resolve(res.data);
+          } else {
+            reject(new ApiError((res && res.error) || { code: 'INTERNAL', message: 'ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง' }));
+          }
+        })
+        .withFailureHandler((err) => {
+          setBusy(-1);
+          console.error(err);
+          reject(new ApiError({ code: 'NETWORK', message: 'เชื่อมต่อกับ Google ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่' }));
+        })
+        .api(action, Object.assign({}, payload, { view: { familyId: S.view.familyId, month: S.view.month } }));
+    });
+  }
+
+  function applyState(state) {
+    S.data = state;
+    S.view.familyId = state.family ? state.family.id : null;
+    S.view.month = state.meta.month;
+    saveView();
+    ZB.render();
+  }
+
+  let toastTimer = 0;
+  function toast(message, isError) {
+    const box = document.getElementById('toast');
+    box.replaceChildren(el('p', { class: isError ? 'err' : '', role: isError ? 'alert' : null }, message));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => box.replaceChildren(), isError ? 7000 : 3500);
+  }
+
+  Object.assign(ZB, { S, el, icon, baht, short, fmtDate, monthLabel, clock, call, toast, ApiError, ROLE, KIND, MONTHS });
+})();
+</script>

@@ -1,0 +1,389 @@
+<script>
+/* Forms: one modal (a centred box on wide screens, a bottom sheet on narrow ones) for every
+   add / edit / delete. Add = empty fields with example placeholders, edit = pre-filled. */
+(function () {
+  'use strict';
+  const ZB = window.ZB;
+  const { S, el, baht, fmtDate, monthLabel, ROLE, KIND } = ZB;
+
+  const NOUN = { items: 'รายการ', types: 'ประเภท', cats: 'หมวดหมู่', users: 'ผู้ใช้', fams: 'ครอบครัว' };
+  const SAVE = { items: 'item.save', types: 'type.save', cats: 'category.save', users: 'user.save', fams: 'family.save' };
+  const opt = (value, label) => ({ value, label });
+
+  /* ---- modal shell ---- */
+
+  let modal = null;
+
+  function openModal(title, content, onClose) {
+    closeModal();
+    const trigger = document.activeElement;
+    const root = document.getElementById('root');
+    const dlg = el('div', { class: 'dlg', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dlg-title', tabindex: '-1' },
+      el('div', { class: 'dlg-h' },
+        el('h2', { id: 'dlg-title' }, title),
+        el('button', { class: 'x', type: 'button', 'aria-label': 'ปิด', onClick: closeModal }, ZB.icon('close', 20, 'var(--text-2)'))),
+      content);
+    const overlay = el('div', { class: 'ovl' }, el('div', { class: 'ovlin' }, dlg));
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeModal(); return; }
+      if (e.key !== 'Tab') return;
+      const items = Array.from(dlg.querySelectorAll('button, input, select, a[href], [tabindex="0"]')).filter((n) => !n.disabled && n.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === dlg)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    document.getElementById('modal-root').replaceChildren(overlay);
+    root.inert = true;
+    document.body.style.overflow = 'hidden';
+    modal = { overlay, trigger, fk: trigger && trigger.getAttribute && trigger.getAttribute('data-fk'), onClose };
+    const target = dlg.querySelector('[data-autofocus]') || dlg.querySelector('input:not([disabled]), select:not([disabled])') || dlg.querySelector('.foot button') || dlg;
+    target.focus();
+  }
+
+  function closeModal() {
+    if (!modal) return;
+    const m = modal;
+    modal = null;
+    m.overlay.remove();
+    document.getElementById('root').inert = false;
+    document.body.style.overflow = '';
+    if (m.onClose) m.onClose();
+    // the screen was re-rendered behind the dialog, so find the same control again
+    const again = m.trigger && m.trigger.isConnected ? m.trigger : (m.fk && document.querySelector('[data-fk="' + m.fk + '"]')) || document.getElementById('main');
+    if (again) again.focus({ preventScroll: true });
+  }
+
+  /* ---- generic form ---- */
+
+  /**
+   * cfg: title, intro (text), fields[], submit (label; null = info only), danger, success (toast text),
+   *      onSubmit(values) -> Promise. field: name, label, type, value, placeholder, options, disabled,
+   *      hint, optional, maxLength, inputMode, autofocus, onChange(value, ctx).
+   */
+  function openForm(cfg) {
+    const inputs = {};
+    const errors = {};
+    const hints = {};
+    const ctx = {
+      get: (n) => inputs[n].value,
+      set: (n, v) => { inputs[n].value = v; },
+      setHint: (n, text) => { hints[n].textContent = text || ''; },
+      setOptions(n, options, value) {
+        const sel = inputs[n];
+        sel.replaceChildren(...options.map((o) => el('option', { value: o.value }, o.label)));
+        sel.value = value !== undefined ? value : options.length ? options[0].value : '';
+      }
+    };
+
+    const form = el('form', { class: 'dlg-b', novalidate: true });
+    if (cfg.intro) form.append(el('p', {}, cfg.intro));
+    (cfg.fields || []).forEach((f) => {
+      const id = 'f-' + f.name;
+      const input = f.type === 'select'
+        ? el('select', { id, name: f.name, disabled: f.disabled }, (f.options || []).map((o) => el('option', { value: o.value }, o.label)))
+        : el('input', {
+          id, name: f.name, type: f.type || 'text', value: f.value === undefined ? '' : f.value, placeholder: f.placeholder,
+          inputmode: f.inputMode, maxlength: f.maxLength, disabled: f.disabled, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false'
+        });
+      if (f.type === 'select') input.value = f.value !== undefined ? f.value : (f.options && f.options[0] ? f.options[0].value : '');
+      if (f.autofocus) input.setAttribute('data-autofocus', '');
+      const err = el('span', { class: 'e', id: id + '-e' });
+      const hint = el('span', { class: 'h', id: id + '-h' }, f.hint || '');
+      input.setAttribute('aria-describedby', id + '-h ' + id + '-e');
+      if (f.onChange) input.addEventListener('change', () => f.onChange(input.value, ctx));
+      inputs[f.name] = input;
+      errors[f.name] = err;
+      hints[f.name] = hint;
+      form.append(el('label', { class: 'fld', for: id }, el('span', {}, f.label + (f.optional ? ' (ไม่บังคับ)' : '')), input, hint, err));
+    });
+
+    const banner = el('div', { class: 'banner', role: 'alert' });
+    const submit = cfg.submit ? el('button', { type: 'submit', class: 'btn' + (cfg.danger ? ' danger' : '') }, cfg.submit) : null;
+    form.append(banner, el('div', { class: 'foot' },
+      el('button', { type: 'button', class: 'btn ghost', onClick: closeModal }, cfg.submit ? 'ยกเลิก' : 'ปิด'),
+      submit));
+
+    function showError(name, message) {
+      const input = inputs[name];
+      errors[name].textContent = message;
+      input.setAttribute('aria-invalid', 'true');
+      input.focus();
+    }
+    function clearErrors() {
+      banner.textContent = '';
+      Object.keys(inputs).forEach((n) => { errors[n].textContent = ''; inputs[n].removeAttribute('aria-invalid'); });
+    }
+
+    let sending = false;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!cfg.submit || sending) return;
+      clearErrors();
+      const values = {};
+      for (const f of cfg.fields || []) {
+        const v = inputs[f.name].value;
+        values[f.name] = f.type === 'select' ? v : v.trim();
+      }
+      for (const f of cfg.fields || []) {
+        if (!f.optional && values[f.name] === '') {
+          return showError(f.name, (f.type === 'select' ? 'กรุณาเลือก' : 'กรุณาใส่') + f.label);
+        }
+      }
+      sending = true;
+      submit.disabled = true;
+      const label = submit.textContent;
+      submit.textContent = 'กำลังบันทึก…';
+      try {
+        const message = await cfg.onSubmit(values);
+        closeModal();
+        ZB.toast(typeof message === 'string' ? message : cfg.success || 'บันทึกแล้ว');
+      } catch (err) {
+        sending = false;
+        submit.disabled = false;
+        submit.textContent = label;
+        const field = err.details && err.details.field;
+        if (field && inputs[field]) showError(field, err.message);
+        else { banner.textContent = err.message; }
+      }
+    });
+
+    openModal(cfg.title, form);
+    return ctx;
+  }
+
+  /* ---- add / edit ---- */
+
+  function familyId() { return S.data.family.id; }
+  const me = () => S.data.me;
+
+  function itemFields(existing) {
+    const f = S.data.family;
+    const first = f.types.find((t) => t.kind === 'EXPENSE') || f.types[0];
+    const typeId = existing ? existing.typeId : first ? first.id : '';
+    const cats = (id) => f.categories.filter((c) => c.typeId === id).map((c) => opt(c.id, c.name));
+    const noCats = 'ประเภทนี้ยังไม่มีหมวดหมู่ ไปที่เมนู หมวดหมู่ เพื่อเพิ่มก่อน';
+    const isAdmin = f.role === 'admin';
+    return [
+      {
+        name: 'typeId', label: 'ประเภท', type: 'select', value: typeId, options: f.types.map((t) => opt(t.id, t.name)),
+        onChange: (v, ctx) => {
+          const list = cats(v);
+          ctx.setOptions('categoryId', list, list.length ? list[0].value : '');
+          ctx.setHint('categoryId', list.length ? '' : noCats);
+        }
+      },
+      { name: 'amount', label: 'จำนวนเงิน (บาท)', placeholder: 'เช่น 350.00', inputMode: 'decimal', value: existing ? String(existing.amount) : '', autofocus: !existing },
+      { name: 'name', label: 'ชื่อรายการ', placeholder: 'เช่น ค่าน้ำมันรถ', maxLength: 80, value: existing ? existing.name : '' },
+      { name: 'categoryId', label: 'หมวดหมู่', type: 'select', value: existing ? existing.categoryId : (cats(typeId)[0] || {}).value || '', options: cats(typeId), hint: cats(typeId).length ? '' : noCats },
+      {
+        name: 'ownerId', label: 'เจ้าของ', type: 'select', value: existing ? existing.ownerId : me().id,
+        options: f.members.filter((m) => isAdmin || m.userId === me().id).map((m) => opt(m.userId, m.name)),
+        disabled: !isAdmin, hint: isAdmin ? '' : 'สมาชิกบันทึกได้เฉพาะรายการของตัวเอง'
+      },
+      { name: 'date', label: 'วันที่', type: 'date', value: existing ? existing.date : S.data.meta.today }
+    ];
+  }
+
+  function typeFields(existing) {
+    const locked = existing && existing.itemCount > 0;
+    return [
+      { name: 'name', label: 'ชื่อประเภท', placeholder: 'เช่น รายจ่าย', maxLength: 40, value: existing ? existing.name : '', autofocus: true },
+      {
+        name: 'kind', label: 'ผลต่อยอดคงเหลือ', type: 'select', value: existing ? existing.kind : 'EXPENSE',
+        options: [opt('EXPENSE', 'ลด (Expense)'), opt('INCOME', 'เพิ่ม (Income)')],
+        disabled: locked, hint: locked ? 'ประเภทนี้มีรายการแล้ว จึงเปลี่ยนรายรับ/รายจ่ายไม่ได้ เพราะตัวเลขเก่าจะเปลี่ยนตาม' : ''
+      }
+    ];
+  }
+
+  function catFields(existing) {
+    const f = S.data.family;
+    const locked = existing && existing.itemCount > 0;
+    return [
+      { name: 'name', label: 'ชื่อหมวด', placeholder: 'เช่น อาหาร', maxLength: 40, value: existing ? existing.name : '', autofocus: true },
+      {
+        name: 'typeId', label: 'ประเภท', type: 'select', value: existing ? existing.typeId : (f.types[0] || {}).id,
+        options: f.types.map((t) => opt(t.id, t.name)),
+        disabled: locked, hint: locked ? 'หมวดนี้มีรายการแล้ว ย้ายรายการไปหมวดอื่นก่อน จึงจะเปลี่ยนประเภทได้' : ''
+      }
+    ];
+  }
+
+  function userFields(existing) {
+    const f = S.data.family;
+    const admin = f.role === 'admin';
+    const self = existing && existing.isMe;
+    return [
+      { name: 'name', label: 'ชื่อที่แสดง', placeholder: 'เช่น น้องมิว', maxLength: 60, value: existing ? existing.name : '', autofocus: true },
+      {
+        name: 'email', label: 'อีเมล Google', type: 'email', placeholder: 'เช่น mew@gmail.com', maxLength: 254, value: existing ? existing.email : '',
+        disabled: !!existing && (!admin || self),
+        hint: existing ? (self ? 'เปลี่ยนอีเมลของตัวเองไม่ได้ เพราะจะเข้าระบบไม่ได้' : '') : 'ใช้อีเมลของบัญชี Google ที่เขาใช้เปิดแอปนี้'
+      },
+      {
+        name: 'role', label: 'บทบาท', type: 'select', value: existing ? existing.role : 'member',
+        options: ['member', 'admin', 'viewer'].map((r) => opt(r, ROLE[r])), disabled: !admin,
+        hint: 'ผู้ดูแลจัดการสมาชิกและหมวดหมู่ได้ · สมาชิกบันทึกรายการของตัวเอง · ดูอย่างเดียวเห็นข้อมูลแต่แก้ไม่ได้'
+      }
+    ];
+  }
+
+  function famFields(existing) {
+    const f = S.data.family;
+    const fields = [
+      { name: 'name', label: 'ชื่อครอบครัว', placeholder: 'เช่น บ้านสุขใจ', maxLength: 60, value: existing ? existing.name : '', autofocus: true }
+    ];
+    if (existing && existing.id === f.id && f.addableUsers.length) {
+      fields.push(
+        { name: 'addUserId', label: 'เพิ่มสมาชิก', type: 'select', optional: true, value: '', options: [opt('', '— ไม่เพิ่ม —')].concat(f.addableUsers.map((u) => opt(u.id, u.name + ' (' + u.email + ')'))), hint: 'เลือกจากคนในครอบครัวอื่นของคุณ หรือเพิ่มคนใหม่ที่เมนู ผู้ใช้' },
+        { name: 'addRole', label: 'บทบาทของสมาชิกใหม่', type: 'select', value: 'member', options: ['member', 'admin', 'viewer'].map((r) => opt(r, ROLE[r])) }
+      );
+    }
+    return fields;
+  }
+
+  function lookup(tab, id) {
+    const f = S.data.family;
+    if (tab === 'items') return f.items.find((x) => x.id === id);
+    if (tab === 'types') return f.types.find((x) => x.id === id);
+    if (tab === 'cats') return f.categories.find((x) => x.id === id);
+    if (tab === 'users') return f.members.find((x) => x.userId === id);
+    return S.data.families.find((x) => x.id === id);
+  }
+
+  function fieldsFor(tab, existing) {
+    return { items: itemFields, types: typeFields, cats: catFields, users: userFields, fams: famFields }[tab](existing);
+  }
+
+  function add(tab) {
+    openForm({
+      title: tab === 'fams' ? 'สร้างครอบครัว' : 'เพิ่ม' + NOUN[tab],
+      intro: tab === 'fams' ? 'คุณจะเป็นผู้ดูแลของครอบครัวนี้ ระบบเตรียมประเภทและหมวดหมู่พื้นฐานให้ทันที' : null,
+      fields: fieldsFor(tab),
+      submit: 'บันทึก',
+      success: 'เพิ่ม' + NOUN[tab] + 'แล้ว',
+      onSubmit: (v) => save(tab, null, v)
+    });
+  }
+
+  function edit(tab, id) {
+    const existing = lookup(tab, id);
+    if (!existing) return ZB.toast('ไม่พบข้อมูลนี้ อาจถูกลบไปแล้ว', true);
+    openForm({
+      title: 'แก้ไข' + NOUN[tab],
+      fields: fieldsFor(tab, existing),
+      submit: 'บันทึก',
+      success: 'บันทึกการแก้ไขแล้ว',
+      onSubmit: (v) => save(tab, existing, v)
+    });
+  }
+
+  async function save(tab, existing, v) {
+    const base = { familyId: tab === 'fams' ? undefined : familyId() };
+    const body = Object.assign(base, v);
+    if (existing) body[tab === 'users' ? 'userId' : 'id'] = tab === 'users' ? existing.userId : existing.id;
+    if (tab === 'items') delete body.typeId;
+    if (tab === 'fams' && !v.addUserId) { delete body.addUserId; delete body.addRole; }
+    if (tab === 'users' && existing && v.email === undefined) delete body.email;
+    const monthBefore = S.data.meta.month;
+    await ZB.call(SAVE[tab], body);
+    // say where the thing went when it is no longer on the screen the person was looking at
+    if (tab === 'fams' && !existing) return 'สร้างครอบครัว “' + v.name + '” แล้ว กำลังแสดงครอบครัวนี้';
+    if (tab === 'items' && v.date.slice(0, 7) !== monthBefore) return 'บันทึกแล้ว รายการนี้อยู่ในเดือน ' + monthLabel(v.date.slice(0, 7));
+    return undefined;
+  }
+
+  /* ---- delete ---- */
+
+  function info(title, message) {
+    openForm({ title, intro: message, fields: [], submit: null });
+  }
+
+  function remove(tab, id) {
+    const f = S.data.family;
+    const x = lookup(tab, id);
+    if (!x) return ZB.toast('ไม่พบข้อมูลนี้ อาจถูกลบไปแล้ว', true);
+
+    if (tab === 'items') {
+      return openForm({
+        title: 'ลบรายการ',
+        intro: 'ลบ “' + x.name + '” ' + KIND[x.kind].sign + baht(x.amount) + ' บาท ของ ' + x.ownerName + ' วันที่ ' + fmtDate(x.date) + ' ใช่ไหม ข้อมูลจะหายจากแอป แต่ยังย้อนดูได้จากประวัติเวอร์ชันของ Google Sheet',
+        fields: [], submit: 'ลบรายการ', danger: true, success: 'ลบรายการแล้ว',
+        onSubmit: () => ZB.call('item.remove', { familyId: f.id, id }).then(() => undefined)
+      });
+    }
+    if (tab === 'types') {
+      if (x.categoryCount > 0) return info('ลบประเภทไม่ได้', 'ประเภท “' + x.name + '” ยังมี ' + x.categoryCount + ' หมวดหมู่ กรุณาลบหรือย้ายหมวดหมู่ออกก่อน แล้วจึงลบประเภทนี้');
+      return openForm({
+        title: 'ลบประเภท', intro: 'ลบประเภท “' + x.name + '” ใช่ไหม', fields: [], submit: 'ลบประเภท', danger: true, success: 'ลบประเภทแล้ว',
+        onSubmit: () => ZB.call('type.remove', { familyId: f.id, id }).then(() => undefined)
+      });
+    }
+    if (tab === 'cats') {
+      if (x.itemCount > 0) {
+        const targets = f.categories.filter((c) => c.typeId === x.typeId && c.id !== x.id);
+        if (!targets.length) return info('ลบหมวดหมู่ไม่ได้', 'หมวด “' + x.name + '” มี ' + x.itemCount + ' รายการ แต่ยังไม่มีหมวดอื่นในประเภทเดียวกันให้ย้ายไป กรุณาเพิ่มหมวดใหม่ก่อน รายการจะได้ไม่หายไป');
+        return openForm({
+          title: 'ลบหมวดหมู่',
+          intro: 'หมวด “' + x.name + '” มี ' + x.itemCount + ' รายการ เลือกหมวดที่จะย้ายรายการไป แล้วระบบจะลบหมวดนี้ ข้อมูลไม่หาย',
+          fields: [{ name: 'moveToId', label: 'ย้ายรายการไปที่หมวด', type: 'select', value: targets[0].id, options: targets.map((c) => opt(c.id, c.name)) }],
+          submit: 'ย้ายรายการและลบหมวด', danger: true, success: 'ย้ายรายการและลบหมวดแล้ว',
+          onSubmit: (v) => ZB.call('category.remove', { familyId: f.id, id, moveToId: v.moveToId }).then(() => undefined)
+        });
+      }
+      return openForm({
+        title: 'ลบหมวดหมู่', intro: 'ลบหมวด “' + x.name + '” ใช่ไหม หมวดนี้ยังไม่มีรายการ', fields: [], submit: 'ลบหมวดหมู่', danger: true, success: 'ลบหมวดหมู่แล้ว',
+        onSubmit: () => ZB.call('category.remove', { familyId: f.id, id }).then(() => undefined)
+      });
+    }
+    if (tab === 'users') {
+      const others = f.members.filter((m) => m.userId !== x.userId);
+      const body = 'นำ “' + x.name + '” ออกจากครอบครัวนี้ เขาจะเข้าดูข้อมูลของครอบครัวนี้ไม่ได้อีก และถ้าไม่ได้อยู่ครอบครัวอื่น บัญชีนี้จะถูกลบด้วย';
+      return openForm({
+        title: 'นำผู้ใช้ออก',
+        intro: x.itemCount > 0 ? body + ' เขาเป็นเจ้าของ ' + x.itemCount + ' รายการ เลือกคนที่จะรับช่วงต่อ รายการจะไม่หายไป' : body,
+        fields: x.itemCount > 0 ? [{ name: 'reassignToId', label: 'ให้รายการเป็นของ', type: 'select', value: others[0].userId, options: others.map((m) => opt(m.userId, m.name)) }] : [],
+        submit: 'นำออก', danger: true, success: 'นำผู้ใช้ออกแล้ว',
+        onSubmit: (v) => ZB.call('user.remove', { familyId: f.id, userId: x.userId, reassignToId: v.reassignToId }).then(() => undefined)
+      });
+    }
+    return openForm({
+      title: 'ลบครอบครัว',
+      intro: 'ลบครอบครัว “' + x.name + '” จะลบรายการ ' + x.itemCount + ' รายการ และนำสมาชิก ' + x.memberCount + ' คนออกทั้งหมด ย้อนกลับในแอปไม่ได้ (ยังย้อนดูได้จากประวัติเวอร์ชันของ Google Sheet)',
+      fields: [], submit: 'ลบครอบครัว', danger: true, success: 'ลบครอบครัวแล้ว',
+      onSubmit: () => ZB.call('family.remove', { id, force: true }).then(() => undefined)
+    });
+  }
+
+  /* ---- which family, which month ---- */
+
+  function openView() {
+    const d = S.data;
+    const fields = [];
+    if (d.families.length > 1) {
+      fields.push({ name: 'familyId', label: 'ครอบครัว', type: 'select', value: d.family.id, options: d.families.map((f) => opt(f.id, f.name)) });
+    }
+    fields.push({ name: 'month', label: 'เดือนที่แสดง', type: 'select', value: d.meta.month, options: d.meta.months.map((m) => opt(m.value, m.label)) });
+    openForm({
+      title: 'เลือกมุมมอง',
+      intro: d.families.length > 1 ? null : 'ครอบครัว: ' + d.family.name,
+      fields, submit: 'แสดง',
+      onSubmit: async (v) => {
+        if (v.familyId) S.view.familyId = v.familyId;
+        S.view.month = v.month;
+        await ZB.call('state', {});
+        return 'กำลังแสดง ' + S.data.family.name + ' · ' + monthLabel(S.data.meta.month);
+      }
+    });
+  }
+
+  function switchFamily(id) {
+    S.view.familyId = id;
+    ZB.call('state', {}).then(() => ZB.toast('กำลังแสดง “' + S.data.family.name + '”')).catch((e) => ZB.toast(e.message, true));
+  }
+
+  ZB.forms = { add, edit, remove, openView, switchFamily };
+})();
+</script>

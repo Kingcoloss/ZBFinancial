@@ -8,7 +8,8 @@ const HEADERS = {
   Memberships: ['id', 'familyId', 'userId', 'role', 'createdAt'],
   Types: ['id', 'familyId', 'name', 'kind', 'createdAt', 'updatedAt'],
   Categories: ['id', 'familyId', 'typeId', 'name', 'createdAt', 'updatedAt'],
-  Items: ['id', 'familyId', 'categoryId', 'ownerId', 'name', 'amount', 'date', 'createdAt', 'updatedAt']
+  Statuses: ['id', 'familyId', 'name', 'counted', 'createdAt', 'updatedAt'],
+  Items: ['id', 'familyId', 'categoryId', 'ownerId', 'name', 'amount', 'date', 'createdAt', 'updatedAt', 'statusId']
 };
 
 const headerOf = (sheet, n) => sheet.getRange(1, 1, 1, n).getValues()[0];
@@ -74,7 +75,7 @@ test('a deleted tab is recreated with its header the next time it is needed', ()
   const ss = gas.spreadsheet();
   ss.deleteSheet(ss.getSheetByName('Items'));
   ok('state', {});
-  assert.deepEqual(headerOf(ss.getSheetByName('Items'), 9), HEADERS.Items);
+  assert.deepEqual(headerOf(ss.getSheetByName('Items'), 10), HEADERS.Items);
 });
 
 test('a tampered header is reported clearly instead of corrupting data', () => {

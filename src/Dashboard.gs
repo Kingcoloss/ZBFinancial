@@ -2,9 +2,13 @@
  * Dashboard numbers for one family and one month. Pure functions over already-loaded items so
  * they are easy to test.
  *
+ * Only items whose status counts (status.counted) are added up. Everything else is listed in
+ * `scope`, so the screen can say which statuses were counted and what was left out.
+ *
  * The wording follows Aristotle's three appeals:
  *   logos  - every claim comes with the number it is based on,
- *   ethos  - comparisons are fair (a half-finished month is compared with the same days of last month),
+ *   ethos  - comparisons are fair (a half-finished month is compared with the same days of last month,
+ *            and the totals say which statuses they include),
  *   pathos - encouraging when things go well, never blaming when they do not.
  */
 var Dashboard = {
@@ -13,7 +17,9 @@ var Dashboard = {
   /**
    * @param {Object} input
    *   items: every item of the family, enriched with kind ('EXPENSE'|'INCOME'), categoryId,
-   *          categoryName, ownerId, ownerName, amount, date (yyyy-MM-dd)
+   *          categoryName, ownerId, ownerName, amount, date (yyyy-MM-dd), statusId, statusName,
+   *          counted (false = left out of every total; missing = counted)
+   *   statuses: [{ id, name, counted }] of the family, in display order
    *   month: yyyy-MM being viewed
    *   today: yyyy-MM-dd
    */
@@ -21,7 +27,10 @@ var Dashboard = {
     var month = input.month;
     var today = input.today;
     var isCurrentMonth = today.slice(0, 7) === month;
-    var inMonth = input.items.filter(function (i) { return i.date.slice(0, 7) === month; });
+    var all = input.items;
+    var items = all.filter(function (i) { return i.counted !== false; });
+    var skipped = all.filter(function (i) { return i.counted === false && i.date.slice(0, 7) === month; });
+    var inMonth = items.filter(function (i) { return i.date.slice(0, 7) === month; });
 
     var income = 0;
     var expense = 0;
@@ -41,12 +50,63 @@ var Dashboard = {
       expense: expense,
       balance: Util.round2(income - expense),
       count: inMonth.length,
+      skipped: skipped.length,
       byCategory: Dashboard.bars_(expenses, 'categoryId', 'categoryName', expense, true),
       byPerson: Dashboard.bars_(expenses, 'ownerId', 'ownerName', expense, false),
-      trend: Dashboard.trend_(input.items, month)
+      trend: Dashboard.trend_(items, month)
     };
-    out.insight = Dashboard.insight_(out, Dashboard.previousExpense_(input.items, month, isCurrentMonth, today));
+    out.scope = Dashboard.scope_(input.statuses || [], skipped, isCurrentMonth ? 'เดือนนี้' : 'เดือน ' + out.label);
+    out.insight = Dashboard.insight_(out, Dashboard.previousExpense_(items, month, isCurrentMonth, today));
     return out;
+  },
+
+  /**
+   * Which statuses the totals include and what the month left out, in words. null when the family
+   * has no statuses (nothing to explain).
+   */
+  scope_: function (statuses, skipped, when) {
+    if (!statuses.length) return null;
+    var counted = statuses.filter(function (s) { return s.counted; });
+    var everything = counted.length === statuses.length;
+    var basis = everything
+      ? 'ยอดสรุปนับรายการทุกสถานะ'
+      : 'ยอดสรุปนับเฉพาะรายการที่สถานะ ' + counted.map(function (s) { return s.name; }).join(', ');
+
+    var byStatus = [];
+    var index = {};
+    var income = 0;
+    var expense = 0;
+    skipped.forEach(function (i) {
+      if (!index[i.statusId]) {
+        index[i.statusId] = { id: i.statusId, name: i.statusName, count: 0 };
+        byStatus.push(index[i.statusId]);
+      }
+      index[i.statusId].count++;
+      if (i.kind === 'INCOME') income += i.amount;
+      else expense += i.amount;
+    });
+    income = Util.round2(income);
+    expense = Util.round2(expense);
+
+    var text = basis;
+    if (skipped.length) {
+      var money = [];
+      if (income > 0) money.push('รายรับ ' + Util.baht(income) + ' บาท');
+      if (expense > 0) money.push('รายจ่าย ' + Util.baht(expense) + ' บาท');
+      text += ' · ไม่รวม ' + skipped.length + ' รายการใน' + when + ' (' +
+        byStatus.map(function (b) { return b.name + ' ' + b.count; }).join(', ') + ') ' + money.join(' · ');
+    } else if (!everything) {
+      text += ' · ' + when + ' ไม่มีรายการที่ถูกข้าม';
+    }
+    return {
+      text: text,
+      countedNames: counted.map(function (s) { return s.name; }),
+      allCounted: everything,
+      skipped: skipped.length,
+      skippedIncome: income,
+      skippedExpense: expense,
+      byStatus: byStatus
+    };
   },
 
   /** Groups by id, sorts high to low, bar widths relative to the biggest. */
@@ -118,6 +178,13 @@ var Dashboard = {
   },
 
   insight_: function (d, prev) {
+    if (d.count === 0 && d.skipped > 0) {
+      return {
+        tone: 'neutral',
+        text: (d.isCurrentMonth ? 'เดือนนี้' : 'เดือน ' + d.label) + ' มี ' + d.skipped +
+          ' รายการ แต่ทั้งหมดอยู่ในสถานะที่ไม่นับรวมในยอดสรุป เมื่อเสร็จแล้วเปลี่ยนสถานะรายการเพื่อให้ตัวเลขขึ้นที่นี่'
+      };
+    }
     if (d.count === 0) {
       return {
         tone: 'neutral',

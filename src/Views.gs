@@ -20,6 +20,22 @@ var Views = {
     Db.table('Types').all().forEach(function (t) { types[t.id] = t; });
     var cats = {};
     Db.table('Categories').all().forEach(function (c) { cats[c.id] = c; });
+    var statuses = {};
+    var statusesOf = {}; // familyId -> statuses in the order they were created
+    Db.table('Statuses').all().forEach(function (s) {
+      statuses[s.id] = s;
+      (statusesOf[s.familyId] = statusesOf[s.familyId] || []).push(s);
+    });
+
+    // An item whose status is blank or gone (edited by hand in the Sheet) takes the family's default.
+    var statusOf = function (item) {
+      var s = statuses[item.statusId];
+      return s && s.familyId === item.familyId ? s : Statuses.defaultOf(statusesOf[item.familyId] || []);
+    };
+    var counts = function (item) {
+      var s = statusOf(item);
+      return s ? s.counted : true;
+    };
 
     var kindOf = function (item) {
       var c = cats[item.categoryId];
@@ -37,7 +53,7 @@ var Views = {
         allItems.forEach(function (i) {
           if (i.familyId !== f.id) return;
           itemCount++;
-          if (i.date.slice(0, 7) === month) balance += kindOf(i) === 'INCOME' ? i.amount : -i.amount;
+          if (i.date.slice(0, 7) === month && counts(i)) balance += kindOf(i) === 'INCOME' ? i.amount : -i.amount;
         });
         return {
           id: f.id,
@@ -85,6 +101,7 @@ var Views = {
       var c = cats[i.categoryId];
       var t = c ? types[c.typeId] : null;
       var owner = users[i.ownerId];
+      var st = statusOf(i);
       return {
         id: i.id,
         name: i.name,
@@ -98,6 +115,9 @@ var Views = {
         kind: t ? t.kind : 'EXPENSE',
         ownerId: i.ownerId,
         ownerName: owner ? owner.name : '(ไม่ทราบ)',
+        statusId: st ? st.id : '',
+        statusName: st ? st.name : '(ไม่ระบุ)',
+        counted: st ? st.counted : true,
         canEdit: Items.canEdit(me, role, i)
       };
     });
@@ -114,7 +134,7 @@ var Views = {
 
     var spendBy = {};
     monthItems.forEach(function (i) {
-      if (i.kind === 'EXPENSE') spendBy[i.ownerId] = (spendBy[i.ownerId] || 0) + i.amount;
+      if (i.kind === 'EXPENSE' && i.counted) spendBy[i.ownerId] = (spendBy[i.ownerId] || 0) + i.amount;
     });
     var ownedAll = {};
     familyItems.forEach(function (i) { ownedAll[i.ownerId] = (ownedAll[i.ownerId] || 0) + 1; });
@@ -124,6 +144,13 @@ var Views = {
     familyItems.forEach(function (i) { catsAll[i.categoryId] = (catsAll[i.categoryId] || 0) + 1; });
     var catsPerType = {};
     familyCats.forEach(function (c) { catsPerType[c.typeId] = (catsPerType[c.typeId] || 0) + 1; });
+    var statusMonth = {};
+    var statusAll = {};
+    enriched.forEach(function (i) {
+      statusAll[i.statusId] = (statusAll[i.statusId] || 0) + 1;
+      if (i.date.slice(0, 7) === month) statusMonth[i.statusId] = (statusMonth[i.statusId] || 0) + 1;
+    });
+    var familyStatuses = statusesOf[familyId] || [];
     var itemsPerType = {};
     familyItems.forEach(function (i) {
       var c = cats[i.categoryId];
@@ -167,8 +194,17 @@ var Views = {
           };
         })
         .sort(function (a, b) { return Util.byText(a.kind, b.kind); }), // stable: keeps the order they were created in
+      statuses: familyStatuses.map(function (s) {
+        return { id: s.id, name: s.name, counted: s.counted, monthItems: statusMonth[s.id] || 0, itemCount: statusAll[s.id] || 0 };
+      }),
+      defaultStatusId: (Statuses.defaultOf(familyStatuses) || {}).id || '',
       items: monthItems.map(strip),
-      dashboard: Dashboard.compute({ items: enriched, month: month, today: today }),
+      dashboard: Dashboard.compute({
+        items: enriched,
+        statuses: familyStatuses.map(function (s) { return { id: s.id, name: s.name, counted: s.counted }; }),
+        month: month,
+        today: today
+      }),
       addableUsers: role === 'admin' ? Families.addableUsers(me, familyId) : []
     };
     return state;

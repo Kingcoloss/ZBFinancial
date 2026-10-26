@@ -115,6 +115,16 @@ button { cursor: pointer; background: none; border: 0; padding: 0; text-align: i
 .note { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .note a { color: var(--accent); }
 
+/* ---- status filter and the note under the totals ---- */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; border-radius: 999px; font-size: 14px; background: var(--surface); border: 1px solid var(--field); color: var(--text-2); }
+.chip:hover { background: var(--line-soft); }
+.chip small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.chip[aria-pressed="true"] small { color: var(--accent-ink); }
+.scope { display: flex; gap: 8px; align-items: flex-start; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+.scope svg { flex: none; margin-top: 2px; color: var(--accent); }
+
 /* ---- lists ---- */
 .list { overflow: hidden; }
 .list h2 { padding: 14px 16px; border-bottom: 1px solid var(--line); }
@@ -127,9 +137,12 @@ button { cursor: pointer; background: none; border: 0; padding: 0; text-align: i
 .tag { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--line); color: #1F2937; white-space: nowrap; }
 .tag.exp { background: var(--expense-soft); color: var(--expense-ink); }
 .tag.inc { background: var(--income-soft); color: var(--income-ink); }
+.tag.st { background: var(--accent-soft); color: var(--accent-ink); }
+.tag.st.off { background: var(--surface); color: var(--text-2); border: 1px dashed var(--muted); }
 .amt { min-width: 70px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
 .amt.exp { color: var(--expense); }
 .amt.inc { color: var(--income); }
+.amt.off { color: var(--muted); text-decoration: line-through; }
 .acts { display: flex; }
 .act { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; font-size: 13px; color: var(--accent); border-radius: 8px; }
 .act:hover { background: var(--line-soft); }

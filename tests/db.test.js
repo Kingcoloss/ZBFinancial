@@ -75,7 +75,7 @@ test('setting one column on many rows is a single write and leaves other columns
   a.gas.run("Db.reset(); Db.withLock(function () { Db.table('Items').setColumnWhere(function (r) { return r.amount >= 2; }, 'name', 'moved'); })");
   assert.deepEqual(a.gas.rawRows('Items').map((r) => r.name), ['n1', 'moved', 'moved', 'moved', 'moved']);
   assert.deepEqual(a.gas.rawRows('Items').map((r) => r.amount), [1, 2, 3, 4, 5]);
-  assert.ok(sheet.writes - writesBefore <= 5 * 9, 'one grid write, not one per row');
+  assert.ok(sheet.writes - writesBefore <= 5 * 10, 'one grid write, not one per row');
 });
 
 test('writes take the script lock and release it; reads do not', () => {

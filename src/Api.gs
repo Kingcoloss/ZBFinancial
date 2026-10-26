@@ -9,9 +9,12 @@ var Api = {
   routes: {
     'state': { write: false, run: function () { return null; } },
     'item.save': { write: true, run: function (me, p) { return Items.save(me, p); } },
+    'item.status': { write: true, run: function (me, p) { return Items.setStatus(me, p); } },
     'item.remove': { write: true, run: function (me, p) { return Items.remove(me, p); } },
     'category.save': { write: true, run: function (me, p) { return Categories.save(me, p); } },
     'category.remove': { write: true, run: function (me, p) { return Categories.remove(me, p); } },
+    'status.save': { write: true, run: function (me, p) { return Statuses.save(me, p); } },
+    'status.remove': { write: true, run: function (me, p) { return Statuses.remove(me, p); } },
     'type.save': { write: true, run: function (me, p) { return Types.save(me, p); } },
     'type.remove': { write: true, run: function (me, p) { return Types.remove(me, p); } },
     'user.save': { write: true, run: function (me, p) { return Users.save(me, p); } },

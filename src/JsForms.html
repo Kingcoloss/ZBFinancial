@@ -6,8 +6,8 @@
   const ZB = window.ZB;
   const { S, el, baht, fmtDate, monthLabel, ROLE, KIND } = ZB;
 
-  const NOUN = { items: 'รายการ', types: 'ประเภท', cats: 'หมวดหมู่', users: 'ผู้ใช้', fams: 'ครอบครัว' };
-  const SAVE = { items: 'item.save', types: 'type.save', cats: 'category.save', users: 'user.save', fams: 'family.save' };
+  const NOUN = { items: 'รายการ', types: 'ประเภท', cats: 'หมวดหมู่', status: 'สถานะ', users: 'ผู้ใช้', fams: 'ครอบครัว' };
+  const SAVE = { items: 'item.save', types: 'type.save', cats: 'category.save', status: 'status.save', users: 'user.save', fams: 'family.save' };
   const opt = (value, label) => ({ value, label });
 
   /* ---- modal shell ---- */
@@ -158,6 +158,11 @@
   function familyId() { return S.data.family.id; }
   const me = () => S.data.me;
 
+  /** A status that does not count says so in the picker, so the effect is known before saving. */
+  function statusOptions(f) {
+    return f.statuses.map((s) => opt(s.id, s.name + (s.counted ? '' : ' (ไม่นับในยอดสรุป)')));
+  }
+
   function itemFields(existing) {
     const f = S.data.family;
     const first = f.types.find((t) => t.kind === 'EXPENSE') || f.types[0];
@@ -182,7 +187,25 @@
         options: f.members.filter((m) => isAdmin || m.userId === me().id).map((m) => opt(m.userId, m.name)),
         disabled: !isAdmin, hint: isAdmin ? '' : 'สมาชิกบันทึกได้เฉพาะรายการของตัวเอง'
       },
-      { name: 'date', label: 'วันที่', type: 'date', value: existing ? existing.date : S.data.meta.today }
+      { name: 'date', label: 'วันที่', type: 'date', value: existing ? existing.date : S.data.meta.today },
+      {
+        name: 'statusId', label: 'สถานะ', type: 'select', value: existing ? existing.statusId : f.defaultStatusId, options: statusOptions(f),
+        optional: !f.statuses.length,
+        hint: f.statuses.length ? 'สถานะที่ไม่นับในยอดสรุป จะยังอยู่ในรายการ แต่ไม่ถูกบวกในภาพรวม' : 'ครอบครัวนี้ยังไม่มีสถานะ ระบบจะสร้างสถานะเริ่มต้นให้ตอนบันทึก'
+      }
+    ];
+  }
+
+  function statusFields(existing) {
+    return [
+      { name: 'name', label: 'ชื่อสถานะ', placeholder: 'เช่น รอดำเนินการ', maxLength: 30, value: existing ? existing.name : '', autofocus: true },
+      {
+        name: 'counted', label: 'การนับในภาพรวม', type: 'select', value: existing ? String(existing.counted) : 'true',
+        options: [opt('true', 'นับรวมในยอดสรุป'), opt('false', 'ไม่นับรวม (ยังอยู่ในรายการ)')],
+        hint: existing && existing.itemCount > 0
+          ? 'มีผลย้อนหลังกับ ' + existing.itemCount + ' รายการที่ใช้สถานะนี้ ตัวเลขในภาพรวมจะเปลี่ยนทันที'
+          : 'รายการสถานะที่นับรวมจะถูกบวกเป็นรายรับ รายจ่าย และคงเหลือ'
+      }
     ];
   }
 
@@ -249,12 +272,13 @@
     if (tab === 'items') return f.items.find((x) => x.id === id);
     if (tab === 'types') return f.types.find((x) => x.id === id);
     if (tab === 'cats') return f.categories.find((x) => x.id === id);
+    if (tab === 'status') return f.statuses.find((x) => x.id === id);
     if (tab === 'users') return f.members.find((x) => x.userId === id);
     return S.data.families.find((x) => x.id === id);
   }
 
   function fieldsFor(tab, existing) {
-    return { items: itemFields, types: typeFields, cats: catFields, users: userFields, fams: famFields }[tab](existing);
+    return { items: itemFields, types: typeFields, cats: catFields, status: statusFields, users: userFields, fams: famFields }[tab](existing);
   }
 
   function add(tab) {
@@ -338,6 +362,26 @@
         onSubmit: () => ZB.call('category.remove', { familyId: f.id, id }).then(() => undefined)
       });
     }
+    if (tab === 'status') {
+      const targets = f.statuses.filter((s) => s.id !== x.id);
+      if (!targets.length) return info('ลบสถานะไม่ได้', 'ครอบครัวต้องมีสถานะอย่างน้อย 1 สถานะ เพิ่มสถานะใหม่ก่อน จึงจะลบ “' + x.name + '” ได้');
+      if (x.counted && !targets.some((s) => s.counted)) {
+        return info('ลบสถานะไม่ได้', '“' + x.name + '” เป็นสถานะเดียวที่นับรวมในยอดสรุป ตั้งสถานะอื่นให้นับรวมก่อน ไม่เช่นนั้นภาพรวมจะเป็นศูนย์ทั้งหมด');
+      }
+      if (x.itemCount > 0) {
+        return openForm({
+          title: 'ลบสถานะ',
+          intro: 'สถานะ “' + x.name + '” มี ' + x.itemCount + ' รายการ เลือกสถานะที่จะย้ายรายการไป แล้วระบบจะลบสถานะนี้ ข้อมูลไม่หาย ถ้าสถานะที่ย้ายไปนับรวมต่างจากเดิม ตัวเลขในภาพรวมจะเปลี่ยนตาม',
+          fields: [{ name: 'moveToId', label: 'ย้ายรายการไปที่สถานะ', type: 'select', value: targets[0].id, options: statusOptions({ statuses: targets }) }],
+          submit: 'ย้ายรายการและลบสถานะ', danger: true, success: 'ย้ายรายการและลบสถานะแล้ว',
+          onSubmit: (v) => ZB.call('status.remove', { familyId: f.id, id, moveToId: v.moveToId }).then(() => undefined)
+        });
+      }
+      return openForm({
+        title: 'ลบสถานะ', intro: 'ลบสถานะ “' + x.name + '” ใช่ไหม สถานะนี้ยังไม่มีรายการ', fields: [], submit: 'ลบสถานะ', danger: true, success: 'ลบสถานะแล้ว',
+        onSubmit: () => ZB.call('status.remove', { familyId: f.id, id }).then(() => undefined)
+      });
+    }
     if (tab === 'users') {
       const others = f.members.filter((m) => m.userId !== x.userId);
       const body = 'นำ “' + x.name + '” ออกจากครอบครัวนี้ เขาจะเข้าดูข้อมูลของครอบครัวนี้ไม่ได้อีก และถ้าไม่ได้อยู่ครอบครัวอื่น บัญชีนี้จะถูกลบด้วย';
@@ -354,6 +398,24 @@
       intro: 'ลบครอบครัว “' + x.name + '” จะลบรายการ ' + x.itemCount + ' รายการ และนำสมาชิก ' + x.memberCount + ' คนออกทั้งหมด ย้อนกลับในแอปไม่ได้ (ยังย้อนดูได้จากประวัติเวอร์ชันของ Google Sheet)',
       fields: [], submit: 'ลบครอบครัว', danger: true, success: 'ลบครอบครัวแล้ว',
       onSubmit: () => ZB.call('family.remove', { id, force: true }).then(() => undefined)
+    });
+  }
+
+  /* ---- change only the status of one item ---- */
+
+  function setStatus(id) {
+    const f = S.data.family;
+    const x = f.items.find((i) => i.id === id);
+    if (!x) return ZB.toast('ไม่พบรายการนี้ อาจถูกลบไปแล้ว', true);
+    openForm({
+      title: 'เปลี่ยนสถานะ',
+      intro: '“' + x.name + '” ' + KIND[x.kind].sign + baht(x.amount) + ' บาท ของ ' + x.ownerName + ' วันที่ ' + fmtDate(x.date),
+      fields: [{
+        name: 'statusId', label: 'สถานะ', type: 'select', value: x.statusId, options: statusOptions(f),
+        hint: 'สถานะที่ไม่นับในยอดสรุป จะยังอยู่ในรายการ แต่ไม่ถูกบวกในภาพรวม'
+      }],
+      submit: 'บันทึก', success: 'เปลี่ยนสถานะแล้ว',
+      onSubmit: (v) => ZB.call('item.status', { familyId: f.id, id, statusId: v.statusId }).then(() => undefined)
     });
   }
 
@@ -384,6 +446,6 @@
     ZB.call('state', {}).then(() => ZB.toast('กำลังแสดง “' + S.data.family.name + '”')).catch((e) => ZB.toast(e.message, true));
   }
 
-  ZB.forms = { add, edit, remove, openView, switchFamily };
+  ZB.forms = { add, edit, remove, setStatus, openView, switchFamily };
 })();
 </script>

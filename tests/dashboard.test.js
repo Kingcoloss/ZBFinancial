@@ -131,3 +131,50 @@ test('the dashboard reaches the screen through the API with the same numbers', (
   assert.equal(d.trend.length, 6);
   assert.equal(state.families[0].balance, 35180);
 });
+
+/* ---- statuses: items that do not count are left out of every figure, and the scope says so ---- */
+
+const STATUSES = [
+  { id: 'p', name: 'รอดำเนินการ', counted: false },
+  { id: 'd', name: 'ชำระแล้ว', counted: true },
+  { id: 'x', name: 'ยกเลิก', counted: false }
+];
+const inStatus = (id, extra = {}) => ({ statusId: id, statusName: STATUSES.find((s) => s.id === id).name, counted: STATUSES.find((s) => s.id === id).counted, ...extra });
+const computeWith = (items, month = '2026-10', today = '2026-10-25') =>
+  gas.invoke('Dashboard.compute', { items, statuses: STATUSES, month, today });
+
+test('items whose status does not count are left out of totals, bars, the trend and last month\'s comparison', () => {
+  const d = computeWith([
+    item('INCOME', 1000, '2026-10-01', inStatus('d')),
+    item('EXPENSE', 400, '2026-10-02', inStatus('d')),
+    item('EXPENSE', 300, '2026-10-03', inStatus('p')),
+    item('EXPENSE', 200, '2026-10-04', inStatus('x')),
+    item('EXPENSE', 500, '2026-09-02', inStatus('d')),
+    item('EXPENSE', 9000, '2026-09-03', inStatus('p'))
+  ]);
+  assert.deepEqual([d.income, d.expense, d.balance, d.count, d.skipped], [1000, 400, 600, 2, 2]);
+  assert.deepEqual(d.byCategory.map((r) => r.amount), [400]);
+  assert.deepEqual(d.byPerson.map((r) => r.amount), [400]);
+  assert.deepEqual(d.trend.slice(-2).map((t) => t.expense), [500, 400]);
+  assert.match(d.insight.text, /ต่ำกว่าเดือนก่อน 20%/, 'last month counted 500 (not 9,500)');
+});
+
+test('scope names the counted statuses and what the month left out, split into income and expense', () => {
+  const d = computeWith([
+    item('EXPENSE', 300, '2026-10-03', inStatus('p')),
+    item('EXPENSE', 50.5, '2026-10-04', inStatus('p')),
+    item('INCOME', 700, '2026-10-05', inStatus('x')),
+    item('EXPENSE', 80, '2026-09-05', inStatus('x'))
+  ]);
+  assert.equal(d.scope.text, 'ยอดสรุปนับเฉพาะรายการที่สถานะ ชำระแล้ว · ไม่รวม 3 รายการในเดือนนี้ (รอดำเนินการ 2, ยกเลิก 1) รายรับ 700 บาท · รายจ่าย 350.50 บาท');
+  assert.deepEqual([d.scope.skippedIncome, d.scope.skippedExpense], [700, 350.5]);
+  assert.equal(d.insight.text.startsWith('เดือนนี้ มี 3 รายการ แต่ทั้งหมดอยู่ในสถานะที่ไม่นับรวม'), true);
+});
+
+test('scope: nothing left out, everything counted, and no statuses at all', () => {
+  assert.equal(computeWith([item('EXPENSE', 10, '2026-10-03', inStatus('d'))]).scope.text, 'ยอดสรุปนับเฉพาะรายการที่สถานะ ชำระแล้ว · เดือนนี้ ไม่มีรายการที่ถูกข้าม');
+  const all = gas.invoke('Dashboard.compute', { items: [item('EXPENSE', 10, '2026-10-03')], statuses: STATUSES.map((s) => ({ ...s, counted: true })), month: '2026-10', today: '2026-10-25' });
+  assert.equal(all.scope.text, 'ยอดสรุปนับรายการทุกสถานะ');
+  assert.equal(compute([item('EXPENSE', 10, '2026-10-03')]).scope, null);
+  assert.match(computeWith([item('EXPENSE', 1, '2026-08-03', inStatus('x'))], '2026-08').scope.text, /ไม่รวม 1 รายการในเดือน ส\.ค\. 2569 \(ยกเลิก 1\) รายจ่าย 1 บาท/);
+});

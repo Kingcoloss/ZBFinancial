@@ -11,19 +11,29 @@
 var Db = {
   TITLE: 'ZBFinancial · ข้อมูลครอบครัว',
 
-  /** [column, type] with type s = text, n = number, d = date (text yyyy-MM-dd). */
+  /** [column, type] with type s = text, n = number, d = date (text yyyy-MM-dd), b = yes/no (text TRUE / FALSE). */
   SCHEMA: {
     Users: [['id', 's'], ['email', 's'], ['name', 's'], ['createdAt', 's'], ['updatedAt', 's']],
     Families: [['id', 's'], ['name', 's'], ['createdAt', 's'], ['updatedAt', 's']],
     Memberships: [['id', 's'], ['familyId', 's'], ['userId', 's'], ['role', 's'], ['createdAt', 's']],
     Types: [['id', 's'], ['familyId', 's'], ['name', 's'], ['kind', 's'], ['createdAt', 's'], ['updatedAt', 's']],
     Categories: [['id', 's'], ['familyId', 's'], ['typeId', 's'], ['name', 's'], ['createdAt', 's'], ['updatedAt', 's']],
+    Statuses: [['id', 's'], ['familyId', 's'], ['name', 's'], ['counted', 'b'], ['createdAt', 's'], ['updatedAt', 's']],
     Items: [
       ['id', 's'], ['familyId', 's'], ['categoryId', 's'], ['ownerId', 's'], ['name', 's'],
-      ['amount', 'n'], ['date', 'd'], ['createdAt', 's'], ['updatedAt', 's']
+      ['amount', 'n'], ['date', 'd'], ['createdAt', 's'], ['updatedAt', 's'], ['statusId', 's']
     ]
   },
-  TABLES: ['Users', 'Families', 'Memberships', 'Types', 'Categories', 'Items'],
+  TABLES: ['Users', 'Families', 'Memberships', 'Types', 'Categories', 'Statuses', 'Items'],
+
+  /**
+   * Columns that were added to a table after its first release. A Sheet made by an older version
+   * has only the first `from` columns; the first time such a table is read, `run` fills in the new
+   * ones (under the lock) so nobody has to edit the Sheet by hand. `run(sheet, lastRow)`.
+   */
+  UPGRADES: {
+    Items: { from: 9, run: function (sh, lastRow) { Statuses.upgradeItems_(sh, lastRow); } }
+  },
 
   ss_: null,
   createdWorkbook_: false,
@@ -132,12 +142,19 @@ var Db = {
   toCell_: function (type, v) {
     if (type === 'n') return Number(v) || 0;
     if (type === 'd') return Util.cellDate(v);
+    if (type === 'b') return v ? 'TRUE' : 'FALSE';
     return v == null ? '' : String(v);
+  },
+
+  /** A yes/no cell: a real checkbox value, or text a person typed (TRUE, yes, y, 1). */
+  isYes_: function (v) {
+    return v === true || ['TRUE', 'YES', 'Y', '1'].indexOf(String(v == null ? '' : v).trim().toUpperCase()) >= 0;
   },
 
   fromCell_: function (type, v) {
     if (type === 'n') return Number(v) || 0;
     if (type === 'd') return Util.cellDate(v);
+    if (type === 'b') return Db.isYes_(v);
     return v == null ? '' : String(v);
   },
 
@@ -174,8 +191,16 @@ var Db = {
     }
 
     function checkHeader(header) {
+      var up = Db.UPGRADES[name];
       for (var i = 0; i < width; i++) {
         if (String(header[i]) !== cols[i][0]) {
+          if (up && i >= up.from) {
+            throw AppError(
+              'SCHEMA_MISMATCH',
+              'แท็บ ' + name + ' ต้องใช้คอลัมน์ที่ ' + (i + 1) + ' เก็บ "' + cols[i][0] + '" แต่มีข้อมูลอื่นอยู่ ' +
+                'กรุณาย้ายคอลัมน์ที่คุณเพิ่มเองไปทางขวาของคอลัมน์ที่ ' + width + ' แล้วเปิดแอปอีกครั้ง'
+            );
+          }
           throw AppError(
             'SCHEMA_MISMATCH',
             'แท็บ ' + name + ' ใน Google Sheet มีหัวคอลัมน์ไม่ตรงกับระบบ (คอลัมน์ที่ ' + (i + 1) +
@@ -197,6 +222,21 @@ var Db = {
       });
     }
 
+    /** An older Sheet: header matches the first `from` columns and the columns after them are empty. */
+    function isLegacy(values) {
+      var up = Db.UPGRADES[name];
+      if (!up || !values.length) return false;
+      for (var i = 0; i < up.from; i++) {
+        if (String(values[0][i]) !== cols[i][0]) return false;
+      }
+      return values.every(function (row) {
+        for (var j = up.from; j < width; j++) {
+          if (row[j] !== '' && row[j] !== null) return false;
+        }
+        return true;
+      });
+    }
+
     function load() {
       if (t.rows) return t.rows;
       var sh = sheet();
@@ -207,7 +247,22 @@ var Db = {
           if (sh.getLastRow() === 0) writeHeader(sh);
         });
       } else {
+        if (sh.getMaxColumns() < width) {
+          Db.withLock(function () {
+            var max = sh.getMaxColumns();
+            if (max < width) sh.insertColumnsAfter(max, width - max);
+          });
+        }
         var values = sh.getRange(1, 1, last, width).getValues();
+        if (isLegacy(values)) {
+          Db.withLock(function () {
+            // Someone else may have upgraded while we waited for the lock.
+            var now = sh.getLastRow();
+            if (isLegacy(sh.getRange(1, 1, now, width).getValues())) Db.UPGRADES[name].run(sh, now);
+          });
+          last = sh.getLastRow();
+          values = sh.getRange(1, 1, last, width).getValues();
+        }
         checkHeader(values[0]);
         for (var i = 1; i < values.length; i++) {
           var row = values[i];
@@ -238,7 +293,7 @@ var Db = {
 
     function blankRecord() {
       var rec = {};
-      cols.forEach(function (c) { rec[c[0]] = c[1] === 'n' ? 0 : ''; });
+      cols.forEach(function (c) { rec[c[0]] = c[1] === 'n' ? 0 : c[1] === 'b' ? false : ''; });
       return rec;
     }
 

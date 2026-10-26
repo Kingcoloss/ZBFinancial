@@ -52,7 +52,7 @@ test('diagnose passes every check on a healthy install', () => {
   assert.equal(report.ok, true);
   assert.equal(byName(report, 'อีเมล Google').detail, 'owner@example.com');
   assert.match(byName(report, 'Users').detail, /1 แถว/);
-  assert.equal(report.checks.length, 6 + 1 + 1 + 1 + 6 + 1, 'files, template, identity, sheet, six tabs, registration');
+  assert.equal(report.checks.length, 6 + 1 + 1 + 1 + 7 + 1, 'files, template, identity, sheet, seven tabs, registration');
   ok('state', {});
 });
 
@@ -71,10 +71,10 @@ test('diagnose before setup says to run setup, and does not build anything itsel
 test('diagnose is read-only on an existing workbook', () => {
   const { gas } = app();
   gas.invoke('setup');
-  const before = JSON.stringify(['Users', 'Families', 'Memberships', 'Types', 'Categories', 'Items'].map((t) => gas.rawRows(t)));
+  const before = JSON.stringify(['Users', 'Families', 'Memberships', 'Types', 'Categories', 'Statuses', 'Items'].map((t) => gas.rawRows(t)));
   gas.invoke('diagnose');
   gas.invoke('diagnose');
-  const after = JSON.stringify(['Users', 'Families', 'Memberships', 'Types', 'Categories', 'Items'].map((t) => gas.rawRows(t)));
+  const after = JSON.stringify(['Users', 'Families', 'Memberships', 'Types', 'Categories', 'Statuses', 'Items'].map((t) => gas.rawRows(t)));
   assert.equal(after, before);
 });
 

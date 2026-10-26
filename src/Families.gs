@@ -1,5 +1,5 @@
 /**
- * Families: a household with many users. Types, categories and items all belong to one family.
+ * Families: a household with many users. Types, categories, statuses and items all belong to one family.
  */
 var Families = {
   DEFAULT_NAME: 'ครอบครัวของฉัน',
@@ -16,7 +16,7 @@ var Families = {
     return Db.table('Families').get(id);
   },
 
-  /** Creates a family, makes `user` its admin and fills in the starter types and categories. */
+  /** Creates a family, makes `user` its admin and fills in the starter types, categories and statuses. */
   createFor_: function (user, name) {
     var family = Db.table('Families').insert({ name: name })[0];
     Db.table('Memberships').insert({ familyId: family.id, userId: user.id, role: 'admin' });
@@ -39,6 +39,7 @@ var Families = {
       });
     });
     Db.table('Categories').insert(cats);
+    Statuses.seed_(familyId);
   },
 
   /** Create (no id) or rename (id). Optionally adds one existing user while editing. */
@@ -108,6 +109,7 @@ var Families = {
     }
     Db.table('Items').removeWhere(function (i) { return i.familyId === id; });
     Db.table('Categories').removeWhere(function (c) { return c.familyId === id; });
+    Db.table('Statuses').removeWhere(function (s) { return s.familyId === id; });
     Db.table('Types').removeWhere(function (t) { return t.familyId === id; });
     Db.table('Memberships').removeWhere(function (m) { return m.familyId === id; });
     Db.table('Families').remove(id);

@@ -66,6 +66,8 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     assert.equal(await phone.locator('#f-name').getAttribute('placeholder'), 'เช่น ค่าน้ำมันรถ');
     assert.equal(await phone.locator('#f-date').inputValue(), '2026-10-25');
     assert.equal(await phone.evaluate(() => document.activeElement.id), 'f-amount', 'focus starts on the amount');
+    assert.equal(await phone.locator('#f-statusId option:checked').innerText(), 'ชำระแล้ว', 'new items start as paid');
+    assert.deepEqual(await phone.locator('#f-statusId option').allInnerTexts(), ['รอดำเนินการ (ไม่นับในยอดสรุป)', 'ชำระแล้ว', 'ยกเลิก (ไม่นับในยอดสรุป)']);
     await shot(phone, 'phone-add-item');
   });
 
@@ -99,9 +101,9 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     assert.equal(await phone.evaluate(() => document.activeElement.getAttribute('aria-label')), 'เพิ่มรายการ');
   });
 
-  await step('phone: "เพิ่มเติม" lifts ประเภท / ผู้ใช้ / ครอบครัว above the bar', async () => {
+  await step('phone: "เพิ่มเติม" lifts ประเภท / สถานะ / ผู้ใช้ / ครอบครัว above the bar', async () => {
     await phone.getByRole('button', { name: 'เพิ่มเติม' }).click();
-    assert.equal(await phone.locator('.more button').count(), 3);
+    assert.equal(await phone.locator('.more button').count(), 4);
     await shot(phone, 'phone-more');
     await phone.locator('.more button', { hasText: 'ผู้ใช้' }).click();
     assert.match(await text(phone, 'h1'), /ผู้ใช้ \(User\)/);
@@ -128,7 +130,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
 
   await step('desktop: items list; edit opens a centred modal pre-filled; saving changes the row', async () => {
     await desk.locator('.pill', { hasText: 'รายการ' }).click();
-    assert.match(await text(desk, '.page-h p'), /10 รายการ/); // 9 sample items + the one added on the phone
+    assert.match(await text(desk, '.page-h p'), /12 รายการ/); // 11 sample items + the one added on the phone
     await shot(desk, 'desktop-items');
     await desk.getByRole('button', { name: 'แก้ไข ค่าน้ำมันรถ' }).click();
     const dlg = desk.getByRole('dialog');
@@ -152,6 +154,77 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await desk.getByRole('button', { name: 'ลบรายการ' }).click();
     await desk.getByRole('dialog').waitFor({ state: 'detached' });
     assert.equal(await desk.locator('.list', { hasText: 'ค่าน้ำมันรถ' }).count(), 0);
+  });
+
+  await step('desktop: dashboard says which statuses it counts and what it left out', async () => {
+    await desk.locator('.pill', { hasText: 'ภาพรวม' }).click();
+    const scope = await text(desk, '.scope');
+    assert.match(scope, /นับเฉพาะรายการที่สถานะ ชำระแล้ว/);
+    assert.match(scope, /ไม่รวม 2 รายการในเดือนนี้ \(รอดำเนินการ 1, ยกเลิก 1\) รายจ่าย 3,799 บาท/);
+    assert.match(await text(desk, '.kpis'), /11,430.50/, 'pending and cancelled items are not in the expense total');
+    await shot(desk, 'desktop-dashboard-scope');
+  });
+
+  await step('desktop: status chips filter the items list and show how many each holds', async () => {
+    await desk.locator('.pill', { hasText: 'รายการ' }).click();
+    assert.deepEqual(await desk.locator('.chip').allInnerTexts(), ['ทั้งหมด\n11', 'รอดำเนินการ\n1', 'ชำระแล้ว\n9', 'ยกเลิก\n1']);
+    assert.equal(await desk.locator('.chip[aria-pressed="true"]').innerText().then((t) => t.split('\n')[0]), 'ทั้งหมด');
+    await desk.locator('.chip', { hasText: 'รอดำเนินการ' }).click();
+    assert.equal(await desk.locator('.list .item').count(), 1);
+    assert.match(await text(desk, '.list'), /ค่าอินเทอร์เน็ต/);
+    assert.match(await text(desk, '.list .item .tag.st.off'), /รอดำเนินการ/);
+    assert.match(await text(desk, '.page-h p'), /1 จาก 11 รายการ/);
+    await shot(desk, 'desktop-items-filtered');
+    await desk.locator('.chip', { hasText: 'ทั้งหมด' }).click();
+    assert.equal(await desk.locator('.list .item').count(), 11);
+  });
+
+  await step('desktop: marking a pending bill as paid moves it into the totals', async () => {
+    await desk.getByRole('button', { name: 'สถานะ ค่าอินเทอร์เน็ต' }).click();
+    const dlg = desk.getByRole('dialog');
+    await dlg.waitFor();
+    assert.equal(await desk.locator('#f-statusId option:checked').innerText(), 'รอดำเนินการ (ไม่นับในยอดสรุป)');
+    await shot(desk, 'desktop-change-status');
+    await desk.locator('#f-statusId').selectOption({ label: 'ชำระแล้ว' });
+    await desk.getByRole('button', { name: 'บันทึก' }).click();
+    await dlg.waitFor({ state: 'detached' });
+    assert.match(await text(desk, '#toast'), /เปลี่ยนสถานะแล้ว/);
+    await desk.locator('.pill', { hasText: 'ภาพรวม' }).click();
+    assert.match(await text(desk, '.kpis'), /12,029.50/);
+    assert.match(await text(desk, '.scope'), /ไม่รวม 1 รายการในเดือนนี้ \(ยกเลิก 1\) รายจ่าย 3,200 บาท/);
+  });
+
+  await step('desktop: managing statuses: add one, stop counting another, delete with items asks where to move them', async () => {
+    await desk.locator('.pill', { hasText: 'สถานะ' }).click();
+    assert.match(await text(desk, 'h1'), /สถานะ \(Status\)/);
+    const listText = await text(desk, '.list');
+    assert.match(listText, /ชำระแล้ว[\s\S]*นับรวมในยอดสรุป · 15 รายการ · เริ่มต้นของรายการใหม่/, JSON.stringify(listText));
+    // the only status that counts cannot stop counting
+    await desk.getByRole('button', { name: 'แก้ไข ชำระแล้ว' }).click();
+    await desk.locator('#f-counted').selectOption({ label: 'ไม่นับรวม (ยังอยู่ในรายการ)' });
+    await desk.getByRole('button', { name: 'บันทึก' }).click();
+    await desk.locator('#f-counted-e', { hasText: /ต้องมีสถานะที่นับรวมในยอดสรุปอย่างน้อย 1 สถานะ/ }).waitFor();
+    await desk.keyboard.press('Escape');
+
+    await desk.getByRole('button', { name: '+ เพิ่มสถานะ' }).click();
+    assert.equal(await desk.locator('#f-name').getAttribute('placeholder'), 'เช่น รอดำเนินการ');
+    await desk.locator('#f-name').fill('ชำระแล้ว');
+    await desk.getByRole('button', { name: 'บันทึก' }).click();
+    await desk.locator('#f-name-e', { hasText: /มีสถานะชื่อ "ชำระแล้ว" อยู่แล้ว/ }).waitFor();
+    await desk.locator('#f-name').fill('ผ่อนชำระ');
+    await shot(desk, 'desktop-add-status');
+    await desk.getByRole('button', { name: 'บันทึก' }).click();
+    await desk.getByRole('dialog').waitFor({ state: 'detached' });
+    assert.match(await text(desk, '.list'), /ผ่อนชำระ/);
+
+    await desk.getByRole('button', { name: 'ลบ ยกเลิก' }).click();
+    assert.match(await text(desk, '[role=dialog]'), /มี 1 รายการ เลือกสถานะที่จะย้ายรายการไป/);
+    await desk.locator('#f-moveToId').selectOption({ label: 'รอดำเนินการ (ไม่นับในยอดสรุป)' });
+    await shot(desk, 'desktop-delete-status');
+    await desk.getByRole('button', { name: 'ย้ายรายการและลบสถานะ' }).click();
+    await desk.getByRole('dialog').waitFor({ state: 'detached' });
+    assert.equal(await desk.locator('.list .item', { hasText: /^ยกเลิก/ }).count(), 0);
+    assert.match(await text(desk, '.list'), /รอดำเนินการ[\s\S]*ไม่นับรวมในยอดสรุป · 1 รายการ/);
   });
 
   await step('desktop: deleting a category that has items asks where to move them', async () => {
@@ -212,7 +285,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
 
   /* ---------- roles and access ---------- */
   await step('viewer: reads everything, no add / edit / delete anywhere', async () => {
-    for (const tab of ['รายการ', 'ประเภท', 'หมวดหมู่', 'ผู้ใช้']) {
+    for (const tab of ['รายการ', 'ประเภท', 'หมวดหมู่', 'สถานะ', 'ผู้ใช้']) {
       await viewer.locator('.pill', { hasText: tab }).click();
       assert.equal(await viewer.getByRole('button', { name: /^\+ เพิ่ม/ }).count(), 0, tab);
       assert.equal(await viewer.locator('.act').count(), tab === 'ผู้ใช้' ? 1 : 0, tab + ' (ผู้ใช้: only renaming yourself)');
@@ -227,6 +300,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     const editable = await member.locator('.item', { has: member.locator('.act') }).allInnerTexts();
     assert.equal(editable.length, 2, 'only the two rows น้องมิว owns can be changed');
     assert.ok(editable.every((t) => t.includes('น้องมิว')));
+    assert.equal(await member.getByRole('button', { name: /^สถานะ / }).count(), 2, 'quick status change only on their own rows');
   });
 
   await step('stranger: told they are not invited, with the email shown and a retry', async () => {
@@ -241,10 +315,10 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     const page = await open(browser, url, 'por@gmail.com', { width: 1280, height: 900 });
     for (const width of [320, 360, 390, 414, 600, 720, 721, 768, 820, 1024, 1280, 1440, 1920]) {
       await page.setViewportSize({ width, height: 900 });
-      for (const tab of ['ภาพรวม', 'รายการ', 'ประเภท', 'หมวดหมู่', 'ผู้ใช้', 'ครอบครัว']) {
+      for (const tab of ['ภาพรวม', 'รายการ', 'ประเภท', 'หมวดหมู่', 'สถานะ', 'ผู้ใช้', 'ครอบครัว']) {
         const nav = width <= 720
           ? async () => {
-            if (['ประเภท', 'ผู้ใช้', 'ครอบครัว'].includes(tab)) {
+            if (['ประเภท', 'สถานะ', 'ผู้ใช้', 'ครอบครัว'].includes(tab)) {
               await page.getByRole('button', { name: 'เพิ่มเติม' }).click();
               await page.locator('.more button', { hasText: tab }).click();
             } else {

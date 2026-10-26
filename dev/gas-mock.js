@@ -105,6 +105,11 @@ class MockSheet {
 
   getRange(row, col, rows = 1, cols = 1) { return new MockRange(this, row, col, rows, cols); }
 
+  insertColumnsAfter(after, n) {
+    if (after > this.maxColumns) throw new Error('Invalid column position.');
+    this.maxColumns += n;
+  }
+
   insertRowsAfter(after, n) {
     if (after > this.maxRows) throw new Error('Invalid row position.');
     this.maxRows += n;

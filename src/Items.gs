@@ -1,6 +1,7 @@
 /**
  * Items: one income or expense entry. The Type of an item is the type of its category, so the
- * two can never disagree. Amounts are always positive; the type decides the sign.
+ * two can never disagree. Amounts are always positive; the type decides the sign. Every item has
+ * a status (pending, paid ...) that decides whether it counts towards the dashboard.
  *
  * Who may do what: admins manage every item; members add and change their own;
  * viewers only read.
@@ -44,13 +45,26 @@ var Items = {
       throw AppError('FORBIDDEN', 'สมาชิกบันทึกได้เฉพาะรายการของตัวเอง ให้ผู้ดูแลช่วยบันทึกแทนคนอื่น', { field: 'ownerId' });
     }
 
-    var data = { name: name, amount: amount, date: date, categoryId: category.id, ownerId: ownerId };
+    var status = Statuses.forItem_(familyId, String(p.statusId || ''), cur);
+    var data = { name: name, amount: amount, date: date, categoryId: category.id, ownerId: ownerId, statusId: status.id };
     if (cur) {
       Db.table('Items').update(cur.id, data);
       return { id: cur.id };
     }
     data.familyId = familyId;
     return { id: Db.table('Items').insert(data)[0].id };
+  },
+
+  /** Changes only the status of an item, e.g. pending -> paid. Same permission as editing the item. */
+  setStatus: function (me, p) {
+    var familyId = String(p.familyId || '');
+    var role = Perm.requireWriter(me, familyId);
+    var cur = Items.byId(String(p.id || ''));
+    if (!cur || cur.familyId !== familyId) throw AppError('NOT_FOUND', 'ไม่พบรายการนี้ อาจถูกลบไปแล้ว ลองโหลดหน้าใหม่');
+    if (!Items.canEdit(me, role, cur)) throw Perm.forbidden();
+    var status = Statuses.pick_(familyId, p.statusId);
+    Db.table('Items').update(cur.id, { statusId: status.id });
+    return { id: cur.id };
   },
 
   remove: function (me, p) {

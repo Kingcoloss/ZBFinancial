@@ -62,6 +62,11 @@ function setup() {
     });
   }
 
+  // Reading every tab upgraded older ones; a family that somehow has no statuses gets the starter set.
+  Db.withLock(function () {
+    Db.table('Families').all().forEach(function (f) { Statuses.ensure_(f.id); });
+  });
+
   var summary = { url: ss.getUrl(), spreadsheetId: ss.getId(), tabs: Db.TABLES, workbookCreated: created, adminRegistered: registered ? email : null };
   console.log('ZBFinancial setup: ' + JSON.stringify(summary));
   return summary;
@@ -160,12 +165,29 @@ var Diag = {
 
     if (ss) {
       var tabsOk = true;
+      // Sheets from before a column was added: the app adds it by itself the first time it opens.
+      var legacy = {};
+      Object.keys(Db.UPGRADES).forEach(function (t) {
+        var sh = ss.getSheetByName(t);
+        if (!sh || sh.getLastRow() === 0) return;
+        var cols = Db.SCHEMA[t];
+        var from = Db.UPGRADES[t].from;
+        var head = sh.getRange(1, 1, 1, cols.length).getValues()[0];
+        legacy[t] = cols.every(function (c, i) { return i < from ? String(head[i]) === c[0] : head[i] === '' || head[i] === null; });
+      });
+      var upgradePending = Object.keys(legacy).some(function (t) { return legacy[t]; });
       Db.TABLES.forEach(function (t) {
         tabsOk = attempt('แท็บ ' + t + ' และหัวคอลัมน์ถูกต้อง', function () {
           var sh = ss.getSheetByName(t);
+          if (!sh && t === 'Statuses' && upgradePending) {
+            return 'ยังไม่มีแท็บนี้ ระบบจะสร้างให้เองเมื่อเปิดแอปครั้งแรกหลังอัปเดต (หรือรัน setup)';
+          }
           if (!sh) throw new Error('ไม่มีแท็บ ' + t + ' (รัน setup เพื่อสร้างใหม่)');
           var cols = Db.SCHEMA[t];
           if (sh.getLastRow() === 0) throw new Error('แท็บ ' + t + ' ว่าง (รัน setup เพื่อสร้างหัวคอลัมน์)');
+          if (legacy[t]) {
+            return 'ยังเป็นรูปแบบเดิม ' + Db.UPGRADES[t].from + ' คอลัมน์ ระบบจะเพิ่มคอลัมน์สถานะให้เองเมื่อเปิดแอปครั้งแรกหลังอัปเดต (หรือรัน setup) ข้อมูลเดิมไม่ถูกแก้';
+          }
           var head = sh.getRange(1, 1, 1, cols.length).getValues()[0];
           for (var i = 0; i < cols.length; i++) {
             if (String(head[i]) !== cols[i][0]) throw new Error('คอลัมน์ที่ ' + (i + 1) + ' ควรเป็น "' + cols[i][0] + '" แต่เป็น "' + head[i] + '"');

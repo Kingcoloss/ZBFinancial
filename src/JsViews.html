@@ -10,10 +10,11 @@
     ['items', 'รายการ'],
     ['types', 'ประเภท'],
     ['cats', 'หมวดหมู่'],
+    ['status', 'สถานะ'],
     ['users', 'ผู้ใช้'],
     ['fams', 'ครอบครัว']
   ];
-  const MORE = ['types', 'users', 'fams'];
+  const MORE = ['types', 'status', 'users', 'fams'];
   const EN = { EXPENSE: 'Expense', INCOME: 'Income' };
 
   function go(tab) {
@@ -112,10 +113,16 @@
     return { title: i.name, sub: i.categoryName + ' · ' + i.ownerName + ' · ' + fmtDate(i.date) };
   }
 
+  /** Status chip: blue when the status counts towards the totals, grey and dashed when it does not. */
+  function statusTag(i) {
+    return el('span', { class: 'tag st' + (i.counted ? '' : ' off'), title: i.counted ? 'นับรวมในยอดสรุป' : 'ไม่นับรวมในยอดสรุป' }, i.statusName);
+  }
+
   function rowView(r) {
     return el('div', { class: 'item' + (r.current ? ' cur' : ''), 'aria-current': r.current ? 'true' : null },
       el('div', { class: 't' }, el('b', {}, r.title), el('small', {}, r.sub)),
       r.tag && el('span', { class: 'tag ' + (r.tagCls || '') }, r.tag),
+      r.status,
       r.amt !== undefined && el('span', { class: 'amt ' + (r.amtCls || '') }, r.amt),
       r.actions && r.actions.length > 0 && el('span', { class: 'acts' },
         r.actions.map((a) => el('button', { class: 'act ' + (a.cls || ''), 'data-fk': a.label + ':' + r.id, 'aria-label': a.label + ' ' + r.title, onClick: a.run }, a.label))));
@@ -137,6 +144,7 @@
         kpi('รายรับ', db.income, 'var(--income)'),
         kpi('รายจ่าย', db.expense, 'var(--expense)'),
         kpi('คงเหลือ', db.balance, db.balance < 0 ? 'var(--danger)' : 'var(--accent)')),
+      db.scope && el('p', { class: 'scope', 'data-fk': 'scope' }, icon('info', 18), el('span', {}, db.scope.text)),
       el('div', { class: 'row-cards' },
         el('section', { class: 'card card-p' },
           el('h2', {}, 'รายจ่ายตามหมวด'),
@@ -150,7 +158,7 @@
       el('section', { class: 'card list recent' },
         el('h2', {}, 'รายการล่าสุด'),
         recent.length
-          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls })))
+          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, status: statusTag(i), amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off') })))
           : emptyBlock('ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย', f.can.addItem && { label: '+ เพิ่มรายการ', run: () => ZB.forms.add('items') }),
         recent.length > 0 && el('div', { class: 'empty', style: { padding: '8px' } },
           el('button', { class: 'act', onClick: () => go('items') }, 'ดูรายการทั้งหมด'))),
@@ -187,20 +195,25 @@
     const f = d.family;
     const can = f.can;
     const month = monthLabel(d.meta.month);
+    const shown = S.statusFilter === 'all' ? f.items : f.items.filter((i) => i.statusId === S.statusFilter);
     const edit = (tab, id) => ({ label: 'แก้ไข', run: () => ZB.forms.edit(tab, id) });
     const del = (tab, id) => ({ label: 'ลบ', cls: 'del', run: () => ZB.forms.remove(tab, id) });
 
     return {
       items: {
         title: 'รายการ (Items)',
-        hint: 'รายรับรายจ่ายแต่ละครั้ง มีเจ้าของเป็นผู้ใช้หนึ่งคน · แสดงเดือน ' + month + ' (' + f.items.length + ' รายการ)',
+        hint: 'รายรับรายจ่ายแต่ละครั้ง มีเจ้าของเป็นผู้ใช้หนึ่งคน · แสดงเดือน ' + month + ' (' +
+          (shown.length === f.items.length ? f.items.length + ' รายการ' : shown.length + ' จาก ' + f.items.length + ' รายการ') + ')',
         add: can.addItem && '+ เพิ่มรายการ',
-        empty: 'ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย',
-        rows: f.items.map((i) => Object.assign(itemTitle(i), {
+        empty: f.items.length ? 'ไม่มีรายการสถานะ “' + filterName(f) + '” ในเดือนนี้' : 'ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย',
+        emptyAction: f.items.length ? { label: 'ดูทุกสถานะ', run: () => setFilter('all') } : null,
+        filters: statusChips(f),
+        rows: shown.map((i) => Object.assign(itemTitle(i), {
           id: i.id,
           tag: KIND[i.kind].label, tagCls: KIND[i.kind].cls,
-          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls,
-          actions: i.canEdit ? [edit('items', i.id), del('items', i.id)] : []
+          status: statusTag(i),
+          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off'),
+          actions: i.canEdit ? [{ label: 'สถานะ', run: () => ZB.forms.setStatus(i.id) }, edit('items', i.id), del('items', i.id)] : []
         }))
       },
       types: {
@@ -228,6 +241,20 @@
           sub: c.monthItems + ' รายการ' + (d.meta.month === d.meta.thisMonth ? 'เดือนนี้' : 'ใน ' + month),
           tag: c.typeName, tagCls: KIND[c.kind].cls,
           actions: can.manageStructure ? [edit('cats', c.id), del('cats', c.id)] : []
+        }))
+      },
+      status: {
+        title: 'สถานะ (Status)',
+        hint: 'บอกว่ารายการอยู่ขั้นไหน เช่น รอดำเนินการ หรือชำระแล้ว · สถานะที่ “นับรวม” จะถูกบวกในภาพรวม ส่วนที่ไม่นับจะไม่ถูกบวกแต่ยังเห็นในรายการ',
+        add: can.manageStructure && '+ เพิ่มสถานะ',
+        empty: 'ยังไม่มีสถานะ เพิ่มสถานะแรกเพื่อติดตามความคืบหน้าของรายการ',
+        noMonth: true,
+        rows: f.statuses.map((s) => ({
+          id: s.id,
+          title: s.name,
+          sub: (s.counted ? 'นับรวมในยอดสรุป' : 'ไม่นับรวมในยอดสรุป') + ' · ' + s.itemCount + ' รายการ' + (s.id === f.defaultStatusId ? ' · เริ่มต้นของรายการใหม่' : ''),
+          tag: s.counted ? 'นับรวม' : 'ไม่นับรวม', tagCls: s.counted ? 'st' : 'st off',
+          actions: can.manageStructure ? [edit('status', s.id), del('status', s.id)] : []
         }))
       },
       users: {
@@ -262,17 +289,43 @@
     };
   }
 
+  /* ---- status filter on the items list ---- */
+
+  function setFilter(id) {
+    S.statusFilter = id;
+    ZB.render();
+  }
+
+  function filterName(f) {
+    const s = f.statuses.find((x) => x.id === S.statusFilter);
+    return s ? s.name : '';
+  }
+
+  /** One chip per status with how many items of the month it holds; the pressed one is the filter. */
+  function statusChips(f) {
+    if (!f.statuses.length || !f.items.length) return null;
+    const count = (id) => f.items.filter((i) => i.statusId === id).length;
+    const chip = (id, text, n) => el('button', {
+      class: 'chip', 'data-fk': 'chip:' + id, 'aria-pressed': String(S.statusFilter === id), onClick: () => setFilter(id)
+    }, text, el('small', {}, String(n)));
+    return el('div', { class: 'chips', role: 'group', 'aria-label': 'กรองตามสถานะ' },
+      chip('all', 'ทั้งหมด', f.items.length),
+      f.statuses.map((s) => chip(s.id, s.name, count(s.id))));
+  }
+
   function page(d) {
     if (S.tab === 'dash') return dashboard(d);
     const m = modules(d)[S.tab];
+    const own = m.emptyAction || (m.add && { label: m.add, run: () => ZB.forms.add(S.tab) });
     return [
       el('div', { class: 'page-h' },
         el('div', {}, el('h1', {}, m.title), el('p', {}, m.hint)),
         el('div', { class: 'tools' },
           !m.noMonth && stepper(),
           m.add && el('button', { class: 'btn', 'data-fk': 'add', onClick: () => ZB.forms.add(S.tab) }, m.add))),
+      m.filters,
       el('section', { class: 'card list', 'aria-label': m.title },
-        m.rows.length ? m.rows.map(rowView) : emptyBlock(m.empty, m.add && { label: m.add, run: () => ZB.forms.add(S.tab) }))
+        m.rows.length ? m.rows.map(rowView) : emptyBlock(m.empty, own))
     ];
   }
 

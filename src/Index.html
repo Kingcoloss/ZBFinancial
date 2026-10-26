@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<title>ZBFinancial</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<?!= include_('Styles') ?>
+</head>
+<body>
+<div id="busy" aria-hidden="true"></div>
+<div id="root" class="app">
+  <p class="boot" role="status">กำลังเปิดข้อมูลจาก Google Sheet ของครอบครัว…</p>
+</div>
+<div id="modal-root"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<noscript><p class="boot">ต้องเปิดใช้งาน JavaScript เพื่อใช้ ZBFinancial</p></noscript>
+<?!= include_('JsCore') ?>
+<?!= include_('JsViews') ?>
+<?!= include_('JsForms') ?>
+<?!= include_('JsMain') ?>
+</body>
+</html>

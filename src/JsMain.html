@@ -1,0 +1,37 @@
+<script>
+/* Main: start-up and the full-page messages for when the app cannot open. */
+(function () {
+  'use strict';
+  const ZB = window.ZB;
+  const { S } = ZB;
+
+  const FATAL = {
+    NOT_INVITED: 'ยังไม่ได้รับเชิญเข้าครอบครัว',
+    NO_IDENTITY: 'ยังยืนยันตัวตนไม่ได้',
+    SHEET_UNAVAILABLE: 'เปิด Google Sheet ไม่ได้',
+    SCHEMA_MISMATCH: 'โครงสร้าง Google Sheet ไม่ตรงกับระบบ',
+    NETWORK: 'เชื่อมต่อไม่ได้'
+  };
+
+  function boot() {
+    S.fatal = null;
+    S.data = null;
+    const root = document.getElementById('root');
+    root.replaceChildren(ZB.el('p', { class: 'boot', role: 'status' }, 'กำลังเปิดข้อมูลจาก Google Sheet ของครอบครัว…'));
+    ZB.call('state', {}).catch((e) => {
+      S.fatal = { title: FATAL[e.code] || 'เปิดแอปไม่สำเร็จ', message: e.message };
+      ZB.render();
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && S.more && !document.querySelector('.ovl')) {
+      S.more = false;
+      ZB.render();
+    }
+  });
+
+  ZB.boot = boot;
+  boot();
+})();
+</script>

@@ -1,0 +1,14 @@
+{
+  "name": "zbfinancial",
+  "version": "1.0.0",
+  "description": "ZBFinancial: บันทึกรายรับรายจ่ายของครอบครัวบน Google Apps Script + Google Sheets",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "dev": "node dev/server.js",
+    "push": "clasp push",
+    "deploy": "clasp push && clasp deploy"
+  }
+}

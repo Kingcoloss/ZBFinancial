@@ -186,7 +186,7 @@ var Diag = {
           var cols = Db.SCHEMA[t];
           if (sh.getLastRow() === 0) throw new Error('แท็บ ' + t + ' ว่าง (รัน setup เพื่อสร้างหัวคอลัมน์)');
           if (legacy[t]) {
-            return 'ยังเป็นรูปแบบเดิม ' + Db.UPGRADES[t].from + ' คอลัมน์ ระบบจะเพิ่มคอลัมน์สถานะให้เองเมื่อเปิดแอปครั้งแรกหลังอัปเดต (หรือรัน setup) ข้อมูลเดิมไม่ถูกแก้';
+            return 'ยังเป็นรูปแบบเดิม ' + Db.UPGRADES[t].from + ' คอลัมน์ ระบบจะเพิ่มคอลัมน์ใหม่ให้เองเมื่อเปิดแอปครั้งแรกหลังอัปเดต (หรือรัน setup) ข้อมูลเดิมไม่ถูกแก้';
           }
           var head = sh.getRange(1, 1, 1, cols.length).getValues()[0];
           for (var i = 0; i < cols.length; i++) {

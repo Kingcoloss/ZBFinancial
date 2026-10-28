@@ -23,6 +23,8 @@ var Views = {
     var statuses = {};
     var statusesOf = {}; // familyId -> statuses in the order they were created
     Db.table('Statuses').all().forEach(function (s) {
+      // a cancelled status never counts, even if both boxes were ticked by hand in the Sheet
+      s.counted = s.counted && !s.cancelled;
       statuses[s.id] = s;
       (statusesOf[s.familyId] = statusesOf[s.familyId] || []).push(s);
     });
@@ -118,6 +120,7 @@ var Views = {
         statusId: st ? st.id : '',
         statusName: st ? st.name : '(ไม่ระบุ)',
         counted: st ? st.counted : true,
+        cancelled: st ? st.cancelled : false,
         canEdit: Items.canEdit(me, role, i)
       };
     });
@@ -195,13 +198,16 @@ var Views = {
         })
         .sort(function (a, b) { return Util.byText(a.kind, b.kind); }), // stable: keeps the order they were created in
       statuses: familyStatuses.map(function (s) {
-        return { id: s.id, name: s.name, counted: s.counted, monthItems: statusMonth[s.id] || 0, itemCount: statusAll[s.id] || 0 };
+        return {
+          id: s.id, name: s.name, counted: s.counted, cancelled: s.cancelled,
+          monthItems: statusMonth[s.id] || 0, itemCount: statusAll[s.id] || 0
+        };
       }),
       defaultStatusId: (Statuses.defaultOf(familyStatuses) || {}).id || '',
       items: monthItems.map(strip),
       dashboard: Dashboard.compute({
         items: enriched,
-        statuses: familyStatuses.map(function (s) { return { id: s.id, name: s.name, counted: s.counted }; }),
+        statuses: familyStatuses.map(function (s) { return { id: s.id, name: s.name, counted: s.counted, cancelled: s.cancelled }; }),
         month: month,
         today: today
       }),

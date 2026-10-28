@@ -18,7 +18,9 @@ var Db = {
     Memberships: [['id', 's'], ['familyId', 's'], ['userId', 's'], ['role', 's'], ['createdAt', 's']],
     Types: [['id', 's'], ['familyId', 's'], ['name', 's'], ['kind', 's'], ['createdAt', 's'], ['updatedAt', 's']],
     Categories: [['id', 's'], ['familyId', 's'], ['typeId', 's'], ['name', 's'], ['createdAt', 's'], ['updatedAt', 's']],
-    Statuses: [['id', 's'], ['familyId', 's'], ['name', 's'], ['counted', 'b'], ['createdAt', 's'], ['updatedAt', 's']],
+    Statuses: [
+      ['id', 's'], ['familyId', 's'], ['name', 's'], ['counted', 'b'], ['createdAt', 's'], ['updatedAt', 's'], ['cancelled', 'b']
+    ],
     Items: [
       ['id', 's'], ['familyId', 's'], ['categoryId', 's'], ['ownerId', 's'], ['name', 's'],
       ['amount', 'n'], ['date', 'd'], ['createdAt', 's'], ['updatedAt', 's'], ['statusId', 's']
@@ -32,7 +34,8 @@ var Db = {
    * ones (under the lock) so nobody has to edit the Sheet by hand. `run(sheet, lastRow)`.
    */
   UPGRADES: {
-    Items: { from: 9, run: function (sh, lastRow) { Statuses.upgradeItems_(sh, lastRow); } }
+    Items: { from: 9, run: function (sh, lastRow) { Statuses.upgradeItems_(sh, lastRow); } },
+    Statuses: { from: 6, run: function (sh, lastRow) { Statuses.upgradeStatuses_(sh, lastRow); } }
   },
 
   ss_: null,

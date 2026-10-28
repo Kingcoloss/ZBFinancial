@@ -4,6 +4,8 @@
  *
  * Only items whose status counts (status.counted) are added up. Everything else is listed in
  * `scope`, so the screen can say which statuses were counted and what was left out.
+ * `overall` is the second view the same month: income against expense with every status except
+ * the cancelled ones, i.e. the counted items plus the ones still open.
  *
  * The wording follows Aristotle's three appeals:
  *   logos  - every claim comes with the number it is based on,
@@ -18,8 +20,9 @@ var Dashboard = {
    * @param {Object} input
    *   items: every item of the family, enriched with kind ('EXPENSE'|'INCOME'), categoryId,
    *          categoryName, ownerId, ownerName, amount, date (yyyy-MM-dd), statusId, statusName,
-   *          counted (false = left out of every total; missing = counted)
-   *   statuses: [{ id, name, counted }] of the family, in display order
+   *          counted (false = left out of the totals; missing = counted),
+   *          cancelled (true = left out of everything; missing = not cancelled)
+   *   statuses: [{ id, name, counted, cancelled }] of the family, in display order
    *   month: yyyy-MM being viewed
    *   today: yyyy-MM-dd
    */
@@ -55,7 +58,9 @@ var Dashboard = {
       byPerson: Dashboard.bars_(expenses, 'ownerId', 'ownerName', expense, false),
       trend: Dashboard.trend_(items, month)
     };
-    out.scope = Dashboard.scope_(input.statuses || [], skipped, isCurrentMonth ? 'เดือนนี้' : 'เดือน ' + out.label);
+    var when = isCurrentMonth ? 'เดือนนี้' : 'เดือน ' + out.label;
+    out.scope = Dashboard.scope_(input.statuses || [], skipped, when);
+    out.overall = Dashboard.overall_(all, month, input.statuses || [], when);
     out.insight = Dashboard.insight_(out, Dashboard.previousExpense_(items, month, isCurrentMonth, today));
     return out;
   },
@@ -106,6 +111,88 @@ var Dashboard = {
       skippedIncome: income,
       skippedExpense: expense,
       byStatus: byStatus
+    };
+  },
+
+  /**
+   * Income against expense of the month counting every status except cancelled: what the totals
+   * already hold (done) plus what is still open. null when the family has no statuses, because
+   * then there is nothing to tell apart.
+   */
+  overall_: function (all, month, statuses, when) {
+    if (!statuses.length) return null;
+    var side = { INCOME: { done: 0, open: 0 }, EXPENSE: { done: 0, open: 0 } };
+    var open = { count: 0, income: 0, expense: 0 };
+    var cancelledCount = 0;
+    all.forEach(function (i) {
+      if (i.date.slice(0, 7) !== month) return;
+      if (i.cancelled === true) {
+        cancelledCount++;
+        return;
+      }
+      var s = side[i.kind === 'INCOME' ? 'INCOME' : 'EXPENSE'];
+      if (i.counted === false) {
+        s.open += i.amount;
+        open.count++;
+        open[i.kind === 'INCOME' ? 'income' : 'expense'] += i.amount;
+      } else {
+        s.done += i.amount;
+      }
+    });
+    var income = Util.round2(side.INCOME.done + side.INCOME.open);
+    var expense = Util.round2(side.EXPENSE.done + side.EXPENSE.open);
+    var biggest = Math.max(income, expense);
+    var bar = function (kind, label, s) {
+      var total = Util.round2(s.done + s.open);
+      var donePct = total > 0 ? Math.round((s.done / total) * 100) : 0;
+      if (s.open > 0 && donePct > 98) donePct = 98; // keep a sliver of the open part visible
+      if (s.done > 0 && donePct < 2) donePct = 2;
+      return {
+        kind: kind,
+        label: label,
+        total: total,
+        done: Util.round2(s.done),
+        open: Util.round2(s.open),
+        pct: total > 0 ? Math.max(2, Math.round((total / biggest) * 100)) : 0,
+        donePct: donePct
+      };
+    };
+    var balance = Util.round2(income - expense);
+    var ratio = income > 0 ? Math.round((expense / income) * 100) : null;
+
+    var text;
+    if (income === 0 && expense === 0) {
+      text = 'ยังไม่มีรายการที่ไม่ถูกยกเลิกใน' + when;
+    } else if (income === 0) {
+      text = 'ยังไม่มีรายรับใน' + when + ' มีรายจ่าย ' + Util.baht(expense) + ' บาท';
+    } else {
+      text = 'รายจ่ายเป็น ' + ratio + '% ของรายรับ · ' +
+        (balance >= 0 ? 'คงเหลือ ' + Util.baht(balance) + ' บาท' : 'รายจ่ายมากกว่ารายรับ ' + Util.baht(-balance) + ' บาท');
+    }
+
+    var note = 'รวมทุกสถานะ ยกเว้นยกเลิก · ';
+    if (open.count > 0) {
+      var money = [];
+      if (open.income > 0) money.push('รายรับ ' + Util.baht(Util.round2(open.income)) + ' บาท');
+      if (open.expense > 0) money.push('รายจ่าย ' + Util.baht(Util.round2(open.expense)) + ' บาท');
+      note += 'รวมรายการที่ยังไม่เสร็จ ' + open.count + ' รายการ (' + money.join(' · ') + ') ซึ่งยอดสรุปด้านบนยังไม่นับ';
+    } else {
+      note += 'ตรงกับยอดสรุปด้านบน เพราะ' + when + 'ไม่มีรายการที่ยังไม่เสร็จ';
+    }
+    if (cancelledCount > 0) note += ' · ไม่รวม ' + cancelledCount + ' รายการที่ยกเลิก';
+
+    return {
+      income: income,
+      expense: expense,
+      balance: balance,
+      ratio: ratio,
+      openCount: open.count,
+      openIncome: Util.round2(open.income),
+      openExpense: Util.round2(open.expense),
+      cancelledCount: cancelledCount,
+      bars: [bar('INCOME', 'รายรับ', side.INCOME), bar('EXPENSE', 'รายจ่าย', side.EXPENSE)],
+      text: text,
+      note: note
     };
   },
 

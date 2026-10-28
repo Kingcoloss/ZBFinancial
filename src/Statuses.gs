@@ -2,8 +2,11 @@
  * Statuses: where an item stands (pending, paid, cancelled ...). They belong to a family and are
  * managed by its admins, like types and categories.
  *
- * Each status says whether items in it count towards the dashboard totals (`counted`). That is the
- * one rule people need to be able to read off the screen, so the dashboard always states it.
+ * What a status means for the numbers (three kinds, so the dashboard can always say what it did):
+ *   done      counted = true                      items are in every total (ชำระแล้ว)
+ *   open      counted = false, cancelled = false  items are only in the "every status except cancelled"
+ *                                                 income / expense ratio (รอดำเนินการ)
+ *   cancelled cancelled = true (counted = false)  items are in no figure at all (ยกเลิก)
  * Nothing is deleted if it would orphan an item: the caller names the status to move them to.
  */
 var Statuses = {
@@ -11,9 +14,9 @@ var Statuses = {
 
   /** Seeded for every new family. New items start in the first status that counts (ชำระแล้ว). */
   DEFAULTS: [
-    { name: 'รอดำเนินการ', counted: false },
-    { name: 'ชำระแล้ว', counted: true },
-    { name: 'ยกเลิก', counted: false }
+    { name: 'รอดำเนินการ', counted: false, cancelled: false },
+    { name: 'ชำระแล้ว', counted: true, cancelled: false },
+    { name: 'ยกเลิก', counted: false, cancelled: true }
   ],
 
   byId: function (id) {
@@ -33,7 +36,7 @@ var Statuses = {
   seed_: function (familyId) {
     return Db.table('Statuses').insert(
       Statuses.DEFAULTS.map(function (s) {
-        return { familyId: familyId, name: s.name, counted: s.counted };
+        return { familyId: familyId, name: s.name, counted: s.counted, cancelled: s.cancelled };
       })
     );
   },
@@ -64,29 +67,40 @@ var Statuses = {
     return Db.table('Items').count(function (i) { return i.familyId === familyId && i.statusId === statusId; });
   },
 
-  flag_: function (v) {
+  flag_: function (v, field, message) {
     if (v === true || v === 'true') return true;
     if (v === false || v === 'false') return false;
-    throw Util.invalid('counted', 'กรุณาเลือกว่านับรวมในยอดสรุปหรือไม่');
+    throw Util.invalid(field, message);
   },
 
   save: function (me, p) {
     var familyId = String(p.familyId || '');
     Perm.requireAdmin(me, familyId);
     var name = Util.text(p.name, 'ชื่อสถานะ', 'name', 30);
-    var counted = Statuses.flag_(p.counted);
+    var counted = Statuses.flag_(p.counted, 'counted', 'กรุณาเลือกว่านับรวมในยอดสรุปหรือไม่');
     var list = Statuses.forFamily(familyId);
     var clash = list.some(function (s) { return s.id !== p.id && Util.sameName(s.name, name); });
     if (clash) throw AppError('CONFLICT', 'มีสถานะชื่อ "' + name + '" อยู่แล้ว', { field: 'name' });
 
-    if (!p.id) {
+    var cur = null;
+    if (p.id) {
+      cur = Statuses.byId(String(p.id));
+      if (!cur || cur.familyId !== familyId) throw AppError('NOT_FOUND', 'ไม่พบสถานะนี้ อาจถูกลบไปแล้ว ลองโหลดหน้าใหม่');
+    }
+    // An older client that does not send `cancelled` leaves it as it was.
+    var cancelled = p.cancelled === undefined
+      ? !!(cur && cur.cancelled)
+      : Statuses.flag_(p.cancelled, 'cancelled', 'กรุณาเลือกว่าเป็นสถานะยกเลิกหรือไม่');
+    if (cancelled && counted) {
+      throw Util.invalid('cancelled', 'สถานะยกเลิกต้องไม่นับรวมในยอดสรุป เลือก "ยกเลิก" อย่างเดียว หรือเลือก "เสร็จแล้ว" อย่างเดียว');
+    }
+
+    if (!cur) {
       if (list.length >= Statuses.MAX_PER_FAMILY) {
         throw AppError('CONFLICT', 'มีสถานะครบ ' + Statuses.MAX_PER_FAMILY + ' สถานะแล้ว กรุณาลบหรือรวมสถานะที่ไม่ใช้ก่อนเพิ่มใหม่');
       }
-      return { id: Db.table('Statuses').insert({ familyId: familyId, name: name, counted: counted })[0].id };
+      return { id: Db.table('Statuses').insert({ familyId: familyId, name: name, counted: counted, cancelled: cancelled })[0].id };
     }
-    var cur = Statuses.byId(String(p.id));
-    if (!cur || cur.familyId !== familyId) throw AppError('NOT_FOUND', 'ไม่พบสถานะนี้ อาจถูกลบไปแล้ว ลองโหลดหน้าใหม่');
     if (cur.counted && !counted && !list.some(function (s) { return s.id !== cur.id && s.counted; })) {
       throw AppError(
         'CONFLICT',
@@ -94,7 +108,7 @@ var Statuses = {
         { field: 'counted' }
       );
     }
-    Db.table('Statuses').update(cur.id, { name: name, counted: counted });
+    Db.table('Statuses').update(cur.id, { name: name, counted: counted, cancelled: cancelled });
     return { id: cur.id };
   },
 
@@ -154,6 +168,31 @@ var Statuses = {
       var range = sh.getRange(2, statusCol, lastRow - 1, 1);
       range.setNumberFormats(families.map(function () { return ['@']; }));
       range.setValues(families.map(function (r) { return [defaults[String(r[0])] || '']; }));
+    }
+  },
+
+  /**
+   * Run by Db the first time a Statuses tab from before the cancelled flag is read: the status
+   * named ยกเลิก (the starter one) becomes a cancelled status, every other one stays as it was.
+   * A family that renamed it can tick the flag in the สถานะ screen. Header first, like upgradeItems_.
+   * Reads the sheet directly: this runs while the Statuses table itself is loading.
+   */
+  upgradeStatuses_: function (sh, lastRow) {
+    var cols = Db.SCHEMA.Statuses.map(function (c) { return c[0]; });
+    var flagCol = cols.indexOf('cancelled') + 1;
+    var nameCol = cols.indexOf('name') + 1;
+
+    var head = sh.getRange(1, flagCol, 1, 1);
+    head.setNumberFormats([['@']]);
+    head.setValues([['cancelled']]);
+    head.setFontWeight('bold');
+    head.setBackground('#E5E7EB');
+
+    if (lastRow > 1) {
+      var names = sh.getRange(2, nameCol, lastRow - 1, 1).getValues();
+      var range = sh.getRange(2, flagCol, lastRow - 1, 1);
+      range.setNumberFormats(names.map(function () { return ['@']; }));
+      range.setValues(names.map(function (r) { return [String(r[0]).trim() === 'ยกเลิก' ? 'TRUE' : 'FALSE']; }));
     }
   }
 };

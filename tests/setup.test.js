@@ -8,7 +8,7 @@ const HEADERS = {
   Memberships: ['id', 'familyId', 'userId', 'role', 'createdAt'],
   Types: ['id', 'familyId', 'name', 'kind', 'createdAt', 'updatedAt'],
   Categories: ['id', 'familyId', 'typeId', 'name', 'createdAt', 'updatedAt'],
-  Statuses: ['id', 'familyId', 'name', 'counted', 'createdAt', 'updatedAt'],
+  Statuses: ['id', 'familyId', 'name', 'counted', 'createdAt', 'updatedAt', 'cancelled'],
   Items: ['id', 'familyId', 'categoryId', 'ownerId', 'name', 'amount', 'date', 'createdAt', 'updatedAt', 'statusId']
 };
 

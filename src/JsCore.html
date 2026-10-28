@@ -11,6 +11,14 @@
     INCOME: { label: 'รายรับ', sign: '+', cls: 'inc', effect: 'เพิ่มยอดคงเหลือ' }
   };
 
+  /** What a status does to the numbers; see Statuses.gs. */
+  const MEANING = {
+    done: { label: 'เสร็จแล้ว', option: 'เสร็จแล้ว (นับรวมในยอดสรุป)', sub: 'นับรวมในยอดสรุป และในสัดส่วนทุกสถานะ', cls: 'st' },
+    open: { label: 'ยังไม่เสร็จ', option: 'ยังไม่เสร็จ (ไม่นับในยอดสรุป)', sub: 'ไม่นับในยอดสรุป แต่นับในสัดส่วนทุกสถานะ', cls: 'st off' },
+    cancelled: { label: 'ยกเลิก', option: 'ยกเลิก (ไม่นับเลย)', sub: 'ไม่นับในตัวเลขใด ๆ', cls: 'st off void' }
+  };
+  const meaningOf = (s) => (s.cancelled ? 'cancelled' : s.counted ? 'done' : 'open');
+
   /** el('div', { class: 'x', onClick: fn }, 'text', childNode, [more]) - text is never parsed as HTML. */
   function el(tag, attrs, ...kids) {
     const node = document.createElement(tag);
@@ -156,6 +164,6 @@
     toastTimer = setTimeout(() => box.replaceChildren(), isError ? 7000 : 3500);
   }
 
-  Object.assign(ZB, { S, el, icon, baht, short, fmtDate, monthLabel, clock, call, toast, ApiError, ROLE, KIND, MONTHS });
+  Object.assign(ZB, { S, el, icon, baht, short, fmtDate, monthLabel, clock, call, toast, ApiError, ROLE, KIND, MONTHS, MEANING, meaningOf });
 })();
 </script>

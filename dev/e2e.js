@@ -67,7 +67,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     assert.equal(await phone.locator('#f-date').inputValue(), '2026-10-25');
     assert.equal(await phone.evaluate(() => document.activeElement.id), 'f-amount', 'focus starts on the amount');
     assert.equal(await phone.locator('#f-statusId option:checked').innerText(), 'ชำระแล้ว', 'new items start as paid');
-    assert.deepEqual(await phone.locator('#f-statusId option').allInnerTexts(), ['รอดำเนินการ (ไม่นับในยอดสรุป)', 'ชำระแล้ว', 'ยกเลิก (ไม่นับในยอดสรุป)']);
+    assert.deepEqual(await phone.locator('#f-statusId option').allInnerTexts(), ['รอดำเนินการ (ไม่นับในยอดสรุป)', 'ชำระแล้ว', 'ยกเลิก (ไม่นับเลย)']);
     await shot(phone, 'phone-add-item');
   });
 
@@ -165,6 +165,21 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await shot(desk, 'desktop-dashboard-scope');
   });
 
+  await step('desktop: ratio card counts every status except cancelled, and says what it added', async () => {
+    const card = desk.locator('.overall');
+    assert.match(await card.locator('h2').innerText(), /รวมทุกสถานะ ยกเว้นยกเลิก/);
+    assert.equal((await card.locator('.ov-r b').innerText()).trim(), '27%');
+    assert.match(await card.locator('.lead').innerText(), /^รายจ่ายเป็น 27% ของรายรับ · คงเหลือ 32,970.50 บาท$/);
+    const rows = await card.locator('.bar-t').allInnerTexts();
+    assert.match(rows[0], /รายรับ[\s\S]*45,000/);
+    assert.match(rows[1], /รายจ่าย[\s\S]*ยังไม่เสร็จ 599[\s\S]*12,029.50/);
+    const note = await card.locator('.note').innerText();
+    assert.match(note, /รวมรายการที่ยังไม่เสร็จ 1 รายการ \(รายจ่าย 599 บาท\) ซึ่งยอดสรุปด้านบนยังไม่นับ · ไม่รวม 1 รายการที่ยกเลิก/);
+    assert.equal(await card.locator('.seg .open.exp').count(), 1, 'the open part of the expense bar is drawn');
+    assert.match(await text(desk, '.kpis'), /11,430.50/, 'the totals above are unchanged by it');
+    await shot(desk, 'desktop-dashboard-overall');
+  });
+
   await step('desktop: status chips filter the items list and show how many each holds', async () => {
     await desk.locator('.pill', { hasText: 'รายการ' }).click();
     assert.deepEqual(await desk.locator('.chip').allInnerTexts(), ['ทั้งหมด\n11', 'รอดำเนินการ\n1', 'ชำระแล้ว\n9', 'ยกเลิก\n1']);
@@ -192,18 +207,22 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await desk.locator('.pill', { hasText: 'ภาพรวม' }).click();
     assert.match(await text(desk, '.kpis'), /12,029.50/);
     assert.match(await text(desk, '.scope'), /ไม่รวม 1 รายการในเดือนนี้ \(ยกเลิก 1\) รายจ่าย 3,200 บาท/);
+    assert.equal((await desk.locator('.overall .ov-r b').innerText()).trim(), '27%', 'the ratio does not move: the bill was already in it');
+    assert.match(await text(desk, '.overall .note'), /ตรงกับยอดสรุปด้านบน เพราะเดือนนี้ไม่มีรายการที่ยังไม่เสร็จ · ไม่รวม 1 รายการที่ยกเลิก/);
+    assert.equal(await desk.locator('.overall .seg .open').evaluateAll((n) => n.every((x) => x.getBoundingClientRect().width === 0)), true);
   });
 
   await step('desktop: managing statuses: add one, stop counting another, delete with items asks where to move them', async () => {
     await desk.locator('.pill', { hasText: 'สถานะ' }).click();
     assert.match(await text(desk, 'h1'), /สถานะ \(Status\)/);
     const listText = await text(desk, '.list');
-    assert.match(listText, /ชำระแล้ว[\s\S]*นับรวมในยอดสรุป · 15 รายการ · เริ่มต้นของรายการใหม่/, JSON.stringify(listText));
+    assert.match(listText, /ชำระแล้ว[\s\S]*นับรวมในยอดสรุป และในสัดส่วนทุกสถานะ · 15 รายการ · เริ่มต้นของรายการใหม่/, JSON.stringify(listText));
     // the only status that counts cannot stop counting
     await desk.getByRole('button', { name: 'แก้ไข ชำระแล้ว' }).click();
-    await desk.locator('#f-counted').selectOption({ label: 'ไม่นับรวม (ยังอยู่ในรายการ)' });
+    assert.deepEqual(await desk.locator('#f-meaning option').allInnerTexts(), ['เสร็จแล้ว (นับรวมในยอดสรุป)', 'ยังไม่เสร็จ (ไม่นับในยอดสรุป)', 'ยกเลิก (ไม่นับเลย)']);
+    await desk.locator('#f-meaning').selectOption({ label: 'ยกเลิก (ไม่นับเลย)' });
     await desk.getByRole('button', { name: 'บันทึก' }).click();
-    await desk.locator('#f-counted-e', { hasText: /ต้องมีสถานะที่นับรวมในยอดสรุปอย่างน้อย 1 สถานะ/ }).waitFor();
+    await desk.locator('#f-meaning-e', { hasText: /ต้องมีสถานะที่นับรวมในยอดสรุปอย่างน้อย 1 สถานะ/ }).waitFor();
     await desk.keyboard.press('Escape');
 
     await desk.getByRole('button', { name: '+ เพิ่มสถานะ' }).click();
@@ -224,7 +243,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await desk.getByRole('button', { name: 'ย้ายรายการและลบสถานะ' }).click();
     await desk.getByRole('dialog').waitFor({ state: 'detached' });
     assert.equal(await desk.locator('.list .item', { hasText: /^ยกเลิก/ }).count(), 0);
-    assert.match(await text(desk, '.list'), /รอดำเนินการ[\s\S]*ไม่นับรวมในยอดสรุป · 1 รายการ/);
+    assert.match(await text(desk, '.list'), /รอดำเนินการ[\s\S]*ไม่นับในยอดสรุป แต่นับในสัดส่วนทุกสถานะ · 1 รายการ/);
   });
 
   await step('desktop: deleting a category that has items asks where to move them', async () => {

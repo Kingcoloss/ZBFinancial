@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   const ZB = window.ZB;
-  const { S, el, icon, baht, short, fmtDate, monthLabel, clock, ROLE, KIND } = ZB;
+  const { S, el, icon, baht, short, fmtDate, monthLabel, clock, ROLE, KIND, MEANING, meaningOf } = ZB;
 
   const NAV = [
     ['dash', 'ภาพรวม'],
@@ -113,10 +113,14 @@
     return { title: i.name, sub: i.categoryName + ' · ' + i.ownerName + ' · ' + fmtDate(i.date) };
   }
 
-  /** Status chip: blue when the status counts towards the totals, grey and dashed when it does not. */
+  /** Status chip: blue when it counts in the totals, dashed when still open, solid grey when cancelled. */
   function statusTag(i) {
-    return el('span', { class: 'tag st' + (i.counted ? '' : ' off'), title: i.counted ? 'นับรวมในยอดสรุป' : 'ไม่นับรวมในยอดสรุป' }, i.statusName);
+    const m = MEANING[meaningOf(i)];
+    return el('span', { class: 'tag ' + m.cls, title: m.label + ': ' + m.sub }, i.statusName);
   }
+
+  /** Amount colour: normal, muted (open: only in the all-status ratio) or struck through (cancelled). */
+  const amtOff = (i) => (i.cancelled ? ' void' : i.counted ? '' : ' off');
 
   function rowView(r) {
     return el('div', { class: 'item' + (r.current ? ' cur' : ''), 'aria-current': r.current ? 'true' : null },
@@ -145,6 +149,7 @@
         kpi('รายจ่าย', db.expense, 'var(--expense)'),
         kpi('คงเหลือ', db.balance, db.balance < 0 ? 'var(--danger)' : 'var(--accent)')),
       db.scope && el('p', { class: 'scope', 'data-fk': 'scope' }, icon('info', 18), el('span', {}, db.scope.text)),
+      db.overall && overall(db.overall),
       el('div', { class: 'row-cards' },
         el('section', { class: 'card card-p' },
           el('h2', {}, 'รายจ่ายตามหมวด'),
@@ -158,12 +163,37 @@
       el('section', { class: 'card list recent' },
         el('h2', {}, 'รายการล่าสุด'),
         recent.length
-          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, status: statusTag(i), amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off') })))
+          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, status: statusTag(i), amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + amtOff(i) })))
           : emptyBlock('ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย', f.can.addItem && { label: '+ เพิ่มรายการ', run: () => ZB.forms.add('items') }),
         recent.length > 0 && el('div', { class: 'empty', style: { padding: '8px' } },
           el('button', { class: 'act', onClick: () => go('items') }, 'ดูรายการทั้งหมด'))),
       sourceNote(d)
     ];
+  }
+
+  /** Income against expense with every status except cancelled; the striped part is what is still open. */
+  function overall(o) {
+    const bar = (b) => {
+      const cls = b.kind === 'INCOME' ? 'inc' : 'exp';
+      return el('div', { class: 'bar' },
+        el('div', { class: 'bar-t' },
+          el('span', {}, b.label, b.open > 0 && el('small', {}, 'ยังไม่เสร็จ ' + baht(b.open))),
+          el('span', {}, baht(b.total))),
+        el('div', { class: 'track', 'aria-hidden': 'true' },
+          el('div', { class: 'seg', style: { width: b.pct + '%' } },
+            el('span', { class: 'done ' + cls, style: { width: b.donePct + '%' } }),
+            el('span', { class: 'open ' + cls }))));
+    };
+    return el('section', { class: 'card card-p overall', 'data-fk': 'overall' },
+      el('h2', {}, 'สัดส่วนรายรับ–รายจ่าย · รวมทุกสถานะ ยกเว้นยกเลิก'),
+      el('div', { class: 'ov' },
+        el('div', { class: 'ov-r' }, el('b', {}, o.ratio === null ? '–' : o.ratio + '%'), el('span', {}, 'รายจ่ายต่อรายรับ')),
+        el('div', { class: 'ov-b' }, o.bars.map(bar))),
+      el('p', { class: 'lead' }, o.text),
+      o.openCount > 0 && el('p', { class: 'legend', 'aria-hidden': 'true' },
+        el('span', {}, el('i', { class: 'sw done' }), 'นับในยอดสรุปแล้ว'),
+        el('span', {}, el('i', { class: 'sw open' }), 'ยังไม่เสร็จ')),
+      el('p', { class: 'note' }, o.note));
   }
 
   function kpi(label, value, color) {
@@ -212,7 +242,7 @@
           id: i.id,
           tag: KIND[i.kind].label, tagCls: KIND[i.kind].cls,
           status: statusTag(i),
-          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off'),
+          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + amtOff(i),
           actions: i.canEdit ? [{ label: 'สถานะ', run: () => ZB.forms.setStatus(i.id) }, edit('items', i.id), del('items', i.id)] : []
         }))
       },
@@ -245,17 +275,20 @@
       },
       status: {
         title: 'สถานะ (Status)',
-        hint: 'บอกว่ารายการอยู่ขั้นไหน เช่น รอดำเนินการ หรือชำระแล้ว · สถานะที่ “นับรวม” จะถูกบวกในภาพรวม ส่วนที่ไม่นับจะไม่ถูกบวกแต่ยังเห็นในรายการ',
+        hint: 'บอกว่ารายการอยู่ขั้นไหน · เสร็จแล้ว = นับในยอดสรุป · ยังไม่เสร็จ = นับเฉพาะในสัดส่วนรายรับ–รายจ่ายรวมทุกสถานะ · ยกเลิก = ไม่นับเลย แต่ยังเห็นในรายการ',
         add: can.manageStructure && '+ เพิ่มสถานะ',
         empty: 'ยังไม่มีสถานะ เพิ่มสถานะแรกเพื่อติดตามความคืบหน้าของรายการ',
         noMonth: true,
-        rows: f.statuses.map((s) => ({
-          id: s.id,
-          title: s.name,
-          sub: (s.counted ? 'นับรวมในยอดสรุป' : 'ไม่นับรวมในยอดสรุป') + ' · ' + s.itemCount + ' รายการ' + (s.id === f.defaultStatusId ? ' · เริ่มต้นของรายการใหม่' : ''),
-          tag: s.counted ? 'นับรวม' : 'ไม่นับรวม', tagCls: s.counted ? 'st' : 'st off',
-          actions: can.manageStructure ? [edit('status', s.id), del('status', s.id)] : []
-        }))
+        rows: f.statuses.map((s) => {
+          const m = MEANING[meaningOf(s)];
+          return {
+            id: s.id,
+            title: s.name,
+            sub: m.sub + ' · ' + s.itemCount + ' รายการ' + (s.id === f.defaultStatusId ? ' · เริ่มต้นของรายการใหม่' : ''),
+            tag: m.label, tagCls: m.cls,
+            actions: can.manageStructure ? [edit('status', s.id), del('status', s.id)] : []
+          };
+        })
       },
       users: {
         title: 'ผู้ใช้ (User)',

@@ -178,3 +178,48 @@ test('scope: nothing left out, everything counted, and no statuses at all', () =
   assert.equal(compute([item('EXPENSE', 10, '2026-10-03')]).scope, null);
   assert.match(computeWith([item('EXPENSE', 1, '2026-08-03', inStatus('x'))], '2026-08').scope.text, /ไม่รวม 1 รายการในเดือน ส\.ค\. 2569 \(ยกเลิก 1\) รายจ่าย 1 บาท/);
 });
+
+/* ---- overall: income against expense with every status except cancelled ---- */
+
+const STATUSES3 = [
+  { id: 'p', name: 'รอดำเนินการ', counted: false, cancelled: false },
+  { id: 'd', name: 'ชำระแล้ว', counted: true, cancelled: false },
+  { id: 'x', name: 'ยกเลิก', counted: false, cancelled: true }
+];
+const ofStatus = (id, extra = {}) => {
+  const s = STATUSES3.find((x) => x.id === id);
+  return { statusId: id, statusName: s.name, counted: s.counted, cancelled: s.cancelled, ...extra };
+};
+const overall = (items, month = '2026-10') => gas.invoke('Dashboard.compute', { items, statuses: STATUSES3, month, today: '2026-10-25' }).overall;
+
+test('overall: expense above income is stated plainly, without blame', () => {
+  const o = overall([item('INCOME', 1000, '2026-10-01', ofStatus('d')), item('EXPENSE', 1500, '2026-10-02', ofStatus('p'))]);
+  assert.equal(o.ratio, 150);
+  assert.equal(o.text, 'รายจ่ายเป็น 150% ของรายรับ · รายจ่ายมากกว่ารายรับ 500 บาท');
+  assert.deepEqual(o.bars.map((b) => b.pct), [67, 100], 'bars are relative to the bigger side');
+});
+
+test('overall: no income yet shows the expense instead of a meaningless percentage', () => {
+  const o = overall([item('EXPENSE', 300, '2026-10-02', ofStatus('p')), item('EXPENSE', 50, '2026-10-02', ofStatus('x'))]);
+  assert.equal(o.ratio, null);
+  assert.equal(o.text, 'ยังไม่มีรายรับในเดือนนี้ มีรายจ่าย 300 บาท');
+  assert.deepEqual([o.openCount, o.cancelledCount], [1, 1]);
+});
+
+test('overall: the open part of a bar never disappears, and items from other months are ignored', () => {
+  const o = overall([
+    item('EXPENSE', 100000, '2026-10-02', ofStatus('d')),
+    item('EXPENSE', 1, '2026-10-03', ofStatus('p')),
+    item('EXPENSE', 7, '2026-11-03', ofStatus('p')),
+    item('INCOME', 1, '2026-10-04', ofStatus('p'))
+  ]);
+  const expense = o.bars[1];
+  assert.deepEqual([expense.total, expense.open, expense.donePct], [100001, 1, 98]);
+  const income = o.bars[0];
+  assert.deepEqual([income.total, income.done, income.donePct, income.pct], [1, 0, 0, 2]);
+});
+
+test('overall: callers that do not send counted/cancelled flags get every item counted as done', () => {
+  const o = gas.invoke('Dashboard.compute', { items: [item('INCOME', 10, '2026-10-01'), item('EXPENSE', 5, '2026-10-01')], statuses: STATUSES3, month: '2026-10', today: '2026-10-25' }).overall;
+  assert.deepEqual([o.income, o.expense, o.openCount, o.cancelledCount, o.ratio], [10, 5, 0, 0, 50]);
+});

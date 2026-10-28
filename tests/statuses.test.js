@@ -20,7 +20,8 @@ test('a new family starts with รอดำเนินการ, ชำระ�
   assert.deepEqual(a.family.statuses.map((s) => [s.name, s.counted]), [['รอดำเนินการ', false], ['ชำระแล้ว', true], ['ยกเลิก', false]]);
   assert.equal(a.family.defaultStatusId, status(a, 'ชำระแล้ว').id, 'new items start as paid, which is how people used the app before statuses');
   const rows = a.gas.rawRows('Statuses');
-  assert.deepEqual(rows.map((r) => [r.name, r.counted]), [['รอดำเนินการ', 'FALSE'], ['ชำระแล้ว', 'TRUE'], ['ยกเลิก', 'FALSE']]);
+  assert.deepEqual(rows.map((r) => [r.name, r.counted, r.cancelled]), [['รอดำเนินการ', 'FALSE', 'FALSE'], ['ชำระแล้ว', 'TRUE', 'FALSE'], ['ยกเลิก', 'FALSE', 'TRUE']]);
+  assert.deepEqual(a.family.statuses.map((s) => s.cancelled), [false, false, true]);
 });
 
 test('an item takes the default status unless one is chosen, and keeps its status when edited without one', () => {
@@ -238,7 +239,7 @@ test('when every status counts the dashboard says it counts all of them', () => 
   const a = seeded();
   for (const name of ['รอดำเนินการ', 'ยกเลิก']) {
     const s = status(a, name);
-    saveStatus(a, { id: s.id, name: s.name, counted: 'true' });
+    saveStatus(a, { id: s.id, name: s.name, counted: 'true', cancelled: 'false' });
   }
   const scope = a.ok('state', {}, OWNER).state.family.dashboard.scope;
   assert.equal(scope.text, 'ยอดสรุปนับรายการทุกสถานะ');
@@ -464,4 +465,161 @@ test('diagnose still fails a missing Statuses tab on a workbook that is not old'
   const statuses = a.gas.invoke('diagnose').checks.find((c) => c.name.includes('แท็บ Statuses'));
   assert.equal(statuses.ok, false);
   assert.match(statuses.detail, /setup/);
+});
+
+/* ---------- done / open / cancelled, and the income-expense ratio over every status except cancelled ---------- */
+
+test('a status is done, open or cancelled; a cancelled one can never also count', () => {
+  const a = seeded();
+  const err = a.fail('status.save', { familyId: a.familyId, name: 'ทิ้ง', counted: 'true', cancelled: 'true' }, OWNER, 'INVALID');
+  assert.equal(err.details.field, 'cancelled');
+  a.fail('status.save', { familyId: a.familyId, name: 'ทิ้ง', counted: 'false', cancelled: 'maybe' }, OWNER, 'INVALID');
+
+  const made = saveStatus(a, { name: 'คืนเงินแล้ว', counted: 'false', cancelled: 'true' });
+  assert.equal(made.state.family.statuses.find((s) => s.id === made.result.id).cancelled, true);
+
+  // an older client that does not send `cancelled` leaves it as it was ...
+  const cancelled = status(a, 'ยกเลิก');
+  saveStatus(a, { id: cancelled.id, name: 'เลิกแล้ว', counted: 'false' });
+  assert.equal(a.gas.rawRows('Statuses').find((r) => r.id === cancelled.id).cancelled, 'TRUE');
+  // ... so it cannot be switched to counting by accident, but can be freed explicitly
+  a.fail('status.save', { familyId: a.familyId, id: cancelled.id, name: 'เลิกแล้ว', counted: 'true' }, OWNER, 'INVALID');
+  saveStatus(a, { id: cancelled.id, name: 'เลิกแล้ว', counted: 'false', cancelled: 'false' });
+  assert.equal(a.gas.rawRows('Statuses').find((r) => r.id === cancelled.id).cancelled, 'FALSE');
+});
+
+test('a status ticked as both counted and cancelled by hand in the Sheet is treated as cancelled', () => {
+  const a = seeded();
+  addItem(a, { name: 'odd', amount: 70, statusId: status(a, 'ยกเลิก').id });
+  const sheet = a.gas.spreadsheet().getSheetByName('Statuses');
+  sheet.getRange(4, 4, 1, 1).setValues([['TRUE']]);
+  const db = a.ok('state', {}, OWNER).state.family.dashboard;
+  assert.deepEqual([db.expense, db.skipped, db.overall.expense, db.overall.cancelledCount], [0, 1, 0, 1]);
+});
+
+test('overall ratio: counts done and open items, never cancelled ones, and the totals above stay as they were', () => {
+  const a = seeded();
+  const pending = status(a, 'รอดำเนินการ');
+  const cancelled = status(a, 'ยกเลิก');
+  addItem(a, { name: 'salary', amount: 40000, categoryId: a.cat('รายได้ประจำ').id });
+  addItem(a, { name: 'invoice', amount: 10000, categoryId: a.cat('รายได้เสริม').id, statusId: pending.id });
+  addItem(a, { name: 'rent', amount: 15000, categoryId: a.cat('บ้านและสาธารณูปโภค').id });
+  addItem(a, { name: 'bill', amount: 5000, statusId: pending.id });
+  addItem(a, { name: 'trip', amount: 99999, statusId: cancelled.id });
+  addItem(a, { name: 'refund', amount: 8888, categoryId: a.cat('รายได้เสริม').id, statusId: cancelled.id });
+  addItem(a, { name: 'last month bill', amount: 777, date: '2026-09-05', statusId: pending.id });
+
+  const db = a.ok('state', {}, OWNER).state.family.dashboard;
+  assert.deepEqual([db.income, db.expense, db.balance], [40000, 15000, 25000], 'the counted totals are unchanged by the new view');
+  const o = db.overall;
+  assert.deepEqual([o.income, o.expense, o.balance, o.ratio], [50000, 20000, 30000, 40]);
+  assert.deepEqual([o.openCount, o.openIncome, o.openExpense, o.cancelledCount], [2, 10000, 5000, 2]);
+  assert.equal(o.text, 'รายจ่ายเป็น 40% ของรายรับ · คงเหลือ 30,000 บาท');
+  assert.equal(
+    o.note,
+    'รวมทุกสถานะ ยกเว้นยกเลิก · รวมรายการที่ยังไม่เสร็จ 2 รายการ (รายรับ 10,000 บาท · รายจ่าย 5,000 บาท) ซึ่งยอดสรุปด้านบนยังไม่นับ · ไม่รวม 2 รายการที่ยกเลิก'
+  );
+  const [inc, exp] = o.bars;
+  assert.deepEqual([inc.kind, inc.total, inc.done, inc.open, inc.pct, inc.donePct], ['INCOME', 50000, 40000, 10000, 100, 80]);
+  assert.deepEqual([exp.kind, exp.total, exp.done, exp.open, exp.pct, exp.donePct], ['EXPENSE', 20000, 15000, 5000, 40, 75]);
+});
+
+test('overall ratio: when nothing is open it says it equals the totals; a past month is named', () => {
+  const a = seeded();
+  addItem(a, { name: 'salary', amount: 1000, categoryId: a.cat('รายได้ประจำ').id });
+  addItem(a, { name: 'lunch', amount: 250 });
+  const o = a.ok('state', {}, OWNER).state.family.dashboard.overall;
+  assert.deepEqual([o.ratio, o.openCount, o.cancelledCount], [25, 0, 0]);
+  assert.equal(o.note, 'รวมทุกสถานะ ยกเว้นยกเลิก · ตรงกับยอดสรุปด้านบน เพราะเดือนนี้ไม่มีรายการที่ยังไม่เสร็จ');
+  assert.equal(o.bars[0].donePct, 100);
+
+  const sep = a.ok('state', { view: { familyId: a.familyId, month: '2026-09' } }, OWNER).state.family.dashboard.overall;
+  assert.equal(sep.text, 'ยังไม่มีรายการที่ไม่ถูกยกเลิกในเดือน ก.ย. 2569');
+  assert.deepEqual(sep.bars.map((b) => b.pct), [0, 0]);
+});
+
+test('overall ratio: an open item moves into the totals when it is marked done, and the ratio does not move', () => {
+  const a = seeded();
+  addItem(a, { name: 'salary', amount: 1000, categoryId: a.cat('รายได้ประจำ').id });
+  const id = addItem(a, { name: 'bill', amount: 500, statusId: status(a, 'รอดำเนินการ').id }).result.id;
+  const before = a.ok('state', {}, OWNER).state.family.dashboard;
+  assert.deepEqual([before.expense, before.overall.expense, before.overall.ratio], [0, 500, 50]);
+  const after = a.ok('item.status', { familyId: a.familyId, id, statusId: status(a, 'ชำระแล้ว').id, view: { familyId: a.familyId } }, OWNER).state.family.dashboard;
+  assert.deepEqual([after.expense, after.overall.expense, after.overall.ratio, after.overall.openCount], [500, 500, 50, 0]);
+});
+
+test('overall ratio is left out for a family with no statuses (nothing to tell apart)', () => {
+  const a = seeded();
+  addItem(a, { amount: 50 });
+  a.gas.run("Db.reset(); Db.withLock(function () { Db.table('Statuses').removeWhere(function () { return true; }); })");
+  assert.equal(a.ok('state', {}, OWNER).state.family.dashboard.overall, null);
+});
+
+test('a Statuses tab from before the cancelled flag is upgraded: only ยกเลิก becomes cancelled, nothing else changes', () => {
+  const a = seeded();
+  const second = a.ok('family.save', { name: 'บ้านคุณยาย', view: { familyId: a.familyId } }, OWNER).state.family;
+  const renamed = second.statuses.find((s) => s.name === 'ยกเลิก');
+  saveStatus(a, { id: status(a, 'รอดำเนินการ').id, name: 'รอจ่าย', counted: 'false' });
+  addItem(a, { name: 'kept', amount: 321, statusId: status(a, 'ยกเลิก').id });
+  const wanted = JSON.stringify(a.gas.rawRows('Statuses').map((r) => ({ ...r, cancelled: undefined })));
+
+  const sheet = a.gas.spreadsheet().getSheetByName('Statuses');
+  for (let r = 1; r <= sheet.getLastRow(); r++) sheet.grid.delete(`${r}:7`);
+  assert.equal(sheet.getRange(1, 7, 1, 1).getValues()[0][0], '');
+
+  const state = a.ok('state', { view: { familyId: a.familyId } }, OWNER).state;
+  assert.equal(sheet.getRange(1, 7, 1, 1).getValues()[0][0], 'cancelled');
+  assert.equal(JSON.stringify(a.gas.rawRows('Statuses').map((r) => ({ ...r, cancelled: undefined }))), wanted, 'no other column was touched');
+  assert.deepEqual(a.gas.rawRows('Statuses').map((r) => [r.name, r.cancelled]), [
+    ['รอจ่าย', 'FALSE'], ['ชำระแล้ว', 'FALSE'], ['ยกเลิก', 'TRUE'],
+    ['รอดำเนินการ', 'FALSE'], ['ชำระแล้ว', 'FALSE'], ['ยกเลิก', 'TRUE']
+  ]);
+  assert.equal(state.family.dashboard.overall.cancelledCount, 1);
+  assert.ok(renamed.id, 'the other family was upgraded too');
+
+  const writes = sheet.writes;
+  a.ok('state', {}, OWNER);
+  assert.equal(sheet.writes, writes, 'once is enough');
+});
+
+test('a family that renamed ยกเลิก before the flag existed gets it as a plain open status, and can tick the flag itself', () => {
+  const a = seeded();
+  saveStatus(a, { id: status(a, 'ยกเลิก').id, name: 'Cancelled', counted: 'false' });
+  const sheet = a.gas.spreadsheet().getSheetByName('Statuses');
+  for (let r = 1; r <= sheet.getLastRow(); r++) sheet.grid.delete(`${r}:7`);
+  const state = a.ok('state', {}, OWNER).state;
+  assert.deepEqual(state.family.statuses.map((s) => s.cancelled), [false, false, false]);
+  const fixed = saveStatus(a, { id: status(a, 'Cancelled', state.family).id, name: 'Cancelled', counted: 'false', cancelled: 'true' });
+  assert.deepEqual(fixed.state.family.statuses.map((s) => s.cancelled), [false, false, true]);
+});
+
+test('both upgrades at once: a workbook from before statuses ends with the cancelled flag set on the starter set', () => {
+  const a = seeded();
+  addItem(a, { name: 'old', amount: 10 });
+  downgrade(a);
+  a.ok('state', {}, OWNER);
+  assert.deepEqual(a.gas.rawRows('Statuses').map((r) => [r.name, r.cancelled]), [['รอดำเนินการ', 'FALSE'], ['ชำระแล้ว', 'FALSE'], ['ยกเลิก', 'TRUE']]);
+});
+
+test('diagnose reports a Statuses tab without the cancelled column as pending, and changes nothing', () => {
+  const a = seeded();
+  const sheet = a.gas.spreadsheet().getSheetByName('Statuses');
+  for (let r = 1; r <= sheet.getLastRow(); r++) sheet.grid.delete(`${r}:7`);
+  const before = JSON.stringify(a.gas.rawRows('Statuses'));
+  const report = a.gas.invoke('diagnose');
+  assert.deepEqual(report.checks.filter((c) => !c.ok), []);
+  assert.match(report.checks.find((c) => c.name.includes('แท็บ Statuses')).detail, /ยังเป็นรูปแบบเดิม 6 คอลัมน์/);
+  assert.equal(JSON.stringify(a.gas.rawRows('Statuses')), before);
+});
+
+test('a column of the family\'s own sitting where cancelled belongs is reported, never overwritten', () => {
+  const a = seeded();
+  const sheet = a.gas.spreadsheet().getSheetByName('Statuses');
+  for (let r = 1; r <= sheet.getLastRow(); r++) sheet.grid.delete(`${r}:7`);
+  sheet.getRange(1, 7, 1, 1).setValues([['note']]);
+  sheet.getRange(2, 7, 1, 1).setValues([['keep me']]);
+  const err = a.fail('state', {}, OWNER, 'SCHEMA_MISMATCH');
+  assert.match(err.message, /คอลัมน์ที่ 7/);
+  assert.match(err.message, /cancelled/);
+  assert.equal(sheet.getRange(2, 7, 1, 1).getValues()[0][0], 'keep me');
 });

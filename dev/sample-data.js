@@ -39,6 +39,8 @@ function seedSample(gas) {
   [['2026-09', 21000], ['2026-08', 24500], ['2026-07', 19800], ['2026-06', 23100], ['2026-05', 17600]].forEach(([m, amount]) => {
     add('รายจ่ายรวม ' + m, amount, m + '-15', 'อาหาร', me);
   });
+  // a bill from last month that is still open: the trend draws it striped on top of September's solid bar
+  add('ค่าประกันรถ', 4200, '2026-09-20', 'เดินทาง', me, 'รอดำเนินการ');
 
   req('family.save', { name: 'บ้านคุณยาย', view }, por);
   return { familyId, ids: { me, mae, mew } };

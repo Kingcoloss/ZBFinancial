@@ -6,6 +6,9 @@
  * `scope`, so the screen can say which statuses were counted and what was left out.
  * `overall` is the second view the same month: income against expense with every status except
  * the cancelled ones, i.e. the counted items plus the ones still open.
+ * The expense breakdowns (byCategory, byPerson, trend) keep their counted figure (`amount` / `expense`,
+ * the same one the totals use) and add what is still open next to it (`open`), with `total` = both and
+ * the bar widths (`pct`, `donePct`) drawn from the totals, so the screen can show the open part striped.
  *
  * The wording follows Aristotle's three appeals:
  *   logos  - every claim comes with the number it is based on,
@@ -44,7 +47,10 @@ var Dashboard = {
     income = Util.round2(income);
     expense = Util.round2(expense);
 
-    var expenses = inMonth.filter(function (i) { return i.kind === 'EXPENSE'; });
+    // everything but cancelled: the counted items (done) and the ones still open
+    var live = all.filter(function (i) { return i.cancelled !== true; });
+    var liveExpenses = live.filter(function (i) { return i.kind === 'EXPENSE' && i.date.slice(0, 7) === month; });
+    var liveExpense = Util.round2(liveExpenses.reduce(function (sum, i) { return sum + i.amount; }, 0));
     var out = {
       month: month,
       label: Util.monthLabel(month),
@@ -54,9 +60,9 @@ var Dashboard = {
       balance: Util.round2(income - expense),
       count: inMonth.length,
       skipped: skipped.length,
-      byCategory: Dashboard.bars_(expenses, 'categoryId', 'categoryName', expense, true),
-      byPerson: Dashboard.bars_(expenses, 'ownerId', 'ownerName', expense, false),
-      trend: Dashboard.trend_(items, month)
+      byCategory: Dashboard.bars_(liveExpenses, 'categoryId', 'categoryName', liveExpense, true),
+      byPerson: Dashboard.bars_(liveExpenses, 'ownerId', 'ownerName', liveExpense, false),
+      trend: Dashboard.trend_(live, month)
     };
     var when = isCurrentMonth ? 'เดือนนี้' : 'เดือน ' + out.label;
     out.scope = Dashboard.scope_(input.statuses || [], skipped, when);
@@ -144,9 +150,6 @@ var Dashboard = {
     var biggest = Math.max(income, expense);
     var bar = function (kind, label, s) {
       var total = Util.round2(s.done + s.open);
-      var donePct = total > 0 ? Math.round((s.done / total) * 100) : 0;
-      if (s.open > 0 && donePct > 98) donePct = 98; // keep a sliver of the open part visible
-      if (s.done > 0 && donePct < 2) donePct = 2;
       return {
         kind: kind,
         label: label,
@@ -154,7 +157,7 @@ var Dashboard = {
         done: Util.round2(s.done),
         open: Util.round2(s.open),
         pct: total > 0 ? Math.max(2, Math.round((total / biggest) * 100)) : 0,
-        donePct: donePct
+        donePct: Dashboard.donePct_(s.done, s.open)
       };
     };
     var balance = Util.round2(income - expense);
@@ -196,59 +199,94 @@ var Dashboard = {
     };
   },
 
-  /** Groups by id, sorts high to low, bar widths relative to the biggest. */
+  /**
+   * How much of a bar (counted + open) is the counted part, as a whole percent. Both parts keep a
+   * visible sliver, so a tiny open amount next to a big counted one is still seen.
+   */
+  donePct_: function (done, open) {
+    var total = done + open;
+    var pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    if (open > 0 && pct > 98) pct = 98;
+    if (done > 0 && pct < 2) pct = 2;
+    return pct;
+  },
+
+  /**
+   * Groups by id, sorts high to low by what is counted plus what is still open, bar widths
+   * relative to the biggest. `amount` is the counted part, `open` the part still open, `total`
+   * both; `share` is the share of the family's whole expense (`total` argument, open included).
+   */
   bars_: function (list, idKey, nameKey, total, limit) {
     var map = {};
     var order = [];
     list.forEach(function (i) {
       var id = i[idKey];
       if (!map[id]) {
-        map[id] = { id: id, name: i[nameKey], amount: 0 };
+        map[id] = { id: id, name: i[nameKey], done: 0, open: 0 };
         order.push(id);
       }
-      map[id].amount += i.amount;
+      map[id][i.counted === false ? 'open' : 'done'] += i.amount;
     });
     var rows = order.map(function (id) { return map[id]; });
-    rows.sort(function (a, b) { return b.amount - a.amount || Util.byText(a.name, b.name); });
+    var sum = function (r) { return r.done + r.open; };
+    rows.sort(function (a, b) { return sum(b) - sum(a) || Util.byText(a.name, b.name); });
     if (limit && rows.length > Dashboard.TOP_N) {
       var rest = rows.slice(Dashboard.TOP_N);
       rows = rows.slice(0, Dashboard.TOP_N);
       rows.push({
         id: null,
         name: 'หมวดอื่นที่เหลือ ' + rest.length + ' หมวด',
-        amount: rest.reduce(function (s, r) { return s + r.amount; }, 0)
+        done: rest.reduce(function (s, r) { return s + r.done; }, 0),
+        open: rest.reduce(function (s, r) { return s + r.open; }, 0)
       });
     }
-    var max = rows.reduce(function (m, r) { return Math.max(m, r.amount); }, 0);
+    var max = rows.reduce(function (m, r) { return Math.max(m, sum(r)); }, 0);
     return rows.map(function (r) {
       return {
         id: r.id,
         name: r.name,
-        amount: Util.round2(r.amount),
-        pct: max > 0 ? Math.max(2, Math.round((r.amount / max) * 100)) : 0,
-        share: total > 0 ? Math.round((r.amount / total) * 100) : 0
+        amount: Util.round2(r.done),
+        open: Util.round2(r.open),
+        total: Util.round2(sum(r)),
+        pct: max > 0 ? Math.max(2, Math.round((sum(r) / max) * 100)) : 0,
+        donePct: Dashboard.donePct_(r.done, r.open),
+        share: total > 0 ? Math.round((sum(r) / total) * 100) : 0
       };
     });
   },
 
-  /** Expense and income for the six months ending at `month`. */
+  /**
+   * Expense and income for the six months ending at `month`. `expense` / `income` are the counted
+   * parts; `open` is the expense still open, `total` the expense of both.
+   */
   trend_: function (items, month) {
     var months = [];
     for (var k = 5; k >= 0; k--) months.push(Util.addMonths(month, -k));
-    var rows = months.map(function (m) { return { month: m, label: Util.monthShort(m), expense: 0, income: 0, current: m === month }; });
+    var rows = months.map(function (m) {
+      return { month: m, label: Util.monthShort(m), expense: 0, income: 0, open: 0, current: m === month };
+    });
     var index = {};
     rows.forEach(function (r) { index[r.month] = r; });
     items.forEach(function (i) {
       var r = index[i.date.slice(0, 7)];
       if (!r) return;
-      if (i.kind === 'INCOME') r.income += i.amount;
-      else r.expense += i.amount;
+      if (i.kind === 'INCOME') {
+        if (i.counted !== false) r.income += i.amount;
+      } else if (i.counted === false) {
+        r.open += i.amount;
+      } else {
+        r.expense += i.amount;
+      }
     });
-    var max = rows.reduce(function (m, r) { return Math.max(m, r.expense); }, 0);
+    var max = rows.reduce(function (m, r) { return Math.max(m, r.expense + r.open); }, 0);
     rows.forEach(function (r) {
+      var total = r.expense + r.open;
+      r.donePct = Dashboard.donePct_(r.expense, r.open);
+      r.total = Util.round2(total);
       r.expense = Util.round2(r.expense);
       r.income = Util.round2(r.income);
-      r.pct = r.expense > 0 && max > 0 ? Math.max(4, Math.round((r.expense / max) * 100)) : 0;
+      r.open = Util.round2(r.open);
+      r.pct = total > 0 && max > 0 ? Math.max(4, Math.round((total / max) * 100)) : 0;
     });
     return rows;
   },

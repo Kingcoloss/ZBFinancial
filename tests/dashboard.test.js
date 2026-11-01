@@ -135,15 +135,18 @@ test('the dashboard reaches the screen through the API with the same numbers', (
 /* ---- statuses: items that do not count are left out of every figure, and the scope says so ---- */
 
 const STATUSES = [
-  { id: 'p', name: 'รอดำเนินการ', counted: false },
-  { id: 'd', name: 'ชำระแล้ว', counted: true },
-  { id: 'x', name: 'ยกเลิก', counted: false }
+  { id: 'p', name: 'รอดำเนินการ', counted: false, cancelled: false },
+  { id: 'd', name: 'ชำระแล้ว', counted: true, cancelled: false },
+  { id: 'x', name: 'ยกเลิก', counted: false, cancelled: true }
 ];
-const inStatus = (id, extra = {}) => ({ statusId: id, statusName: STATUSES.find((s) => s.id === id).name, counted: STATUSES.find((s) => s.id === id).counted, ...extra });
+const inStatus = (id, extra = {}) => {
+  const s = STATUSES.find((x) => x.id === id);
+  return { statusId: id, statusName: s.name, counted: s.counted, cancelled: s.cancelled, ...extra };
+};
 const computeWith = (items, month = '2026-10', today = '2026-10-25') =>
   gas.invoke('Dashboard.compute', { items, statuses: STATUSES, month, today });
 
-test('items whose status does not count are left out of totals, bars, the trend and last month\'s comparison', () => {
+test('items whose status does not count are left out of totals and last month\'s comparison; the bars and trend add the open ones beside them', () => {
   const d = computeWith([
     item('INCOME', 1000, '2026-10-01', inStatus('d')),
     item('EXPENSE', 400, '2026-10-02', inStatus('d')),
@@ -153,10 +156,13 @@ test('items whose status does not count are left out of totals, bars, the trend 
     item('EXPENSE', 9000, '2026-09-03', inStatus('p'))
   ]);
   assert.deepEqual([d.income, d.expense, d.balance, d.count, d.skipped], [1000, 400, 600, 2, 2]);
-  assert.deepEqual(d.byCategory.map((r) => r.amount), [400]);
+  assert.deepEqual(d.byCategory.map((r) => r.amount), [400], 'the counted part is the one the totals use');
   assert.deepEqual(d.byPerson.map((r) => r.amount), [400]);
   assert.deepEqual(d.trend.slice(-2).map((t) => t.expense), [500, 400]);
   assert.match(d.insight.text, /ต่ำกว่าเดือนก่อน 20%/, 'last month counted 500 (not 9,500)');
+  // the open 300 rides along, the cancelled 200 is nowhere
+  assert.deepEqual(d.byCategory.map((r) => [r.amount, r.open, r.total]), [[400, 300, 700]]);
+  assert.deepEqual(d.trend.slice(-2).map((t) => [t.open, t.total]), [[9000, 9500], [300, 700]]);
 });
 
 test('scope names the counted statuses and what the month left out, split into income and expense', () => {
@@ -222,4 +228,73 @@ test('overall: the open part of a bar never disappears, and items from other mon
 test('overall: callers that do not send counted/cancelled flags get every item counted as done', () => {
   const o = gas.invoke('Dashboard.compute', { items: [item('INCOME', 10, '2026-10-01'), item('EXPENSE', 5, '2026-10-01')], statuses: STATUSES3, month: '2026-10', today: '2026-10-25' }).overall;
   assert.deepEqual([o.income, o.expense, o.openCount, o.cancelledCount, o.ratio], [10, 5, 0, 0, 50]);
+});
+
+/* ---- breakdowns: the counted part is solid, what is still open rides beside it ---- */
+
+test('by category and by person: open items are added beside the counted ones, cancelled ones never', () => {
+  const d = computeWith([
+    item('EXPENSE', 6000, '2026-10-02', inStatus('d', { categoryId: 'a', categoryName: 'อาหาร', ownerId: 'u1', ownerName: 'พ่อ' })),
+    item('EXPENSE', 2000, '2026-10-03', inStatus('p', { categoryId: 'a', categoryName: 'อาหาร', ownerId: 'u2', ownerName: 'แม่' })),
+    item('EXPENSE', 3000, '2026-10-04', inStatus('p', { categoryId: 'b', categoryName: 'บ้าน', ownerId: 'u2', ownerName: 'แม่' })),
+    item('EXPENSE', 900, '2026-10-05', inStatus('x', { categoryId: 'c', categoryName: 'เดินทาง', ownerId: 'u1', ownerName: 'พ่อ' })),
+    item('EXPENSE', 700, '2026-09-05', inStatus('p', { categoryId: 'c', categoryName: 'เดินทาง', ownerId: 'u1', ownerName: 'พ่อ' })),
+    item('INCOME', 800, '2026-10-06', inStatus('p'))
+  ]);
+  assert.equal(d.expense, 6000, 'the totals still count only what is done');
+  assert.deepEqual(d.byCategory.map((r) => [r.name, r.amount, r.open, r.total, r.pct, r.donePct, r.share]), [
+    ['อาหาร', 6000, 2000, 8000, 100, 75, 73],
+    ['บ้าน', 0, 3000, 3000, 38, 0, 27]
+  ]);
+  assert.deepEqual(d.byPerson.map((r) => [r.name, r.amount, r.open, r.total, r.pct, r.donePct, r.share]), [
+    ['พ่อ', 6000, 0, 6000, 100, 100, 55],
+    ['แม่', 0, 5000, 5000, 83, 0, 45]
+  ]);
+});
+
+test('bars with nothing open look exactly as before: solid, shares of the counted total', () => {
+  const d = computeWith([
+    item('EXPENSE', 300, '2026-10-02', inStatus('d', { categoryId: 'a', categoryName: 'อาหาร' })),
+    item('EXPENSE', 100, '2026-10-03', inStatus('d', { categoryId: 'b', categoryName: 'บ้าน' }))
+  ]);
+  assert.deepEqual(d.byCategory.map((r) => [r.amount, r.open, r.total, r.donePct, r.share]), [[300, 0, 300, 100, 75], [100, 0, 100, 100, 25]]);
+});
+
+test('a month with only open expenses still shows them, and the categories past the top 8 are merged with both parts', () => {
+  const only = computeWith([item('EXPENSE', 250, '2026-10-02', inStatus('p'))]);
+  assert.deepEqual([only.expense, only.count, only.byCategory.length], [0, 0, 1]);
+  assert.deepEqual([only.byCategory[0].amount, only.byCategory[0].open, only.byCategory[0].pct], [0, 250, 100]);
+
+  const many = [];
+  for (let k = 0; k < 10; k++) many.push(item('EXPENSE', 100 + k, '2026-10-02', inStatus(k % 2 ? 'p' : 'd', { categoryId: 'c' + k, categoryName: 'หมวด' + k })));
+  const rows = computeWith(many).byCategory;
+  assert.equal(rows.length, 9);
+  const rest = rows[8];
+  assert.equal(rest.id, null);
+  assert.equal(rest.name, 'หมวดอื่นที่เหลือ 2 หมวด');
+  assert.equal(rest.total, rest.amount + rest.open);
+  assert.deepEqual([rest.amount, rest.open], [100, 101], 'the two smallest are หมวด0 (done) and หมวด1 (open)');
+});
+
+test('trend: each month has its counted expense, its open expense and the bar split between them', () => {
+  const d = computeWith([
+    item('EXPENSE', 300, '2026-10-02', inStatus('d')),
+    item('EXPENSE', 100, '2026-10-03', inStatus('p')),
+    item('EXPENSE', 50, '2026-10-03', inStatus('x')),
+    item('EXPENSE', 200, '2026-08-03', inStatus('p')),
+    item('INCOME', 900, '2026-10-03', inStatus('p'))
+  ]);
+  const now = d.trend[5];
+  assert.deepEqual([now.expense, now.open, now.total, now.pct, now.donePct, now.income], [300, 100, 400, 100, 75, 0]);
+  const aug = d.trend[3];
+  assert.deepEqual([aug.expense, aug.open, aug.total, aug.pct, aug.donePct], [0, 200, 200, 50, 0]);
+  assert.deepEqual(d.trend[0].open, 0);
+});
+
+test('the open part keeps a visible sliver next to a huge counted one, and the other way round', () => {
+  assert.equal(gas.invoke('Dashboard.donePct_', 100000, 1), 98);
+  assert.equal(gas.invoke('Dashboard.donePct_', 1, 100000), 2);
+  assert.equal(gas.invoke('Dashboard.donePct_', 5, 0), 100);
+  assert.equal(gas.invoke('Dashboard.donePct_', 0, 5), 0);
+  assert.equal(gas.invoke('Dashboard.donePct_', 0, 0), 0);
 });

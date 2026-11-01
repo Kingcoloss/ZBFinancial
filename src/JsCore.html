@@ -90,7 +90,7 @@
     tab: 'dash',
     more: false,
     busy: 0,
-    statusFilter: 'all', // items list: 'all' or a status id of the family on screen
+    filter: { status: 'all', owner: 'all', type: 'all', cat: 'all' }, // items list: 'all' or an id of the family on screen
     fatal: null,
     view: loadView()
   };
@@ -146,10 +146,24 @@
     });
   }
 
+  /** A chosen status, owner, type or category may belong to another family or have just been deleted. */
+  function keepFilters(f) {
+    const known = {
+      status: (id) => f.statuses.some((x) => x.id === id),
+      owner: (id) => f.members.some((x) => x.userId === id),
+      type: (id) => f.types.some((x) => x.id === id),
+      cat: (id) => f.categories.some((x) => x.id === id)
+    };
+    Object.keys(S.filter).forEach((k) => {
+      if (S.filter[k] !== 'all' && !(f && known[k](S.filter[k]))) S.filter[k] = 'all';
+    });
+    const c = S.filter.cat !== 'all' && f.categories.find((x) => x.id === S.filter.cat);
+    if (c && S.filter.type !== 'all' && c.typeId !== S.filter.type) S.filter.cat = 'all';
+  }
+
   function applyState(state) {
     S.data = state;
-    // the chosen status may belong to another family or have just been deleted
-    if (S.statusFilter !== 'all' && !(state.family && state.family.statuses.some((x) => x.id === S.statusFilter))) S.statusFilter = 'all';
+    keepFilters(state.family);
     S.view.familyId = state.family ? state.family.id : null;
     S.view.month = state.meta.month;
     saveView();

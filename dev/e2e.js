@@ -35,7 +35,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
   const browser = await chromium.launch();
   const results = [];
   const step = async (name, fn) => {
-    try { await fn(); results.push(['ok', name]); } catch (e) { results.push(['FAIL', name + ' :: ' + e.message.split('\n')[0]]); process.exitCode = 1; }
+    try { await fn(); results.push(['ok', name]); } catch (e) { results.push(['FAIL', name + ' :: ' + (process.env.E2E_VERBOSE ? e.message : e.message.split('\n')[0])]); process.exitCode = 1; }
   };
 
   /* ---------- phone: bottom tabs, add item in a bottom sheet ---------- */
@@ -180,6 +180,29 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await shot(desk, 'desktop-dashboard-overall');
   });
 
+  await step('desktop: spending by category, by person and the trend show open items beside the counted ones', async () => {
+    const cat = desk.locator('[data-fk="by-category"]');
+    const row = cat.locator('.bar', { hasText: 'บ้านและสาธารณูปโภค' });
+    assert.match(await row.locator('.bar-t').innerText(), /บ้านและสาธารณูปโภค[\s\S]*ยังไม่เสร็จ 599[\s\S]*3,049/, 'ค่าไฟ 2,450 counted + ค่าอินเทอร์เน็ต 599 open');
+    assert.equal(await row.locator('.seg .done.cat').count(), 1);
+    assert.equal(await row.locator('.seg .open.cat').count(), 1);
+    assert.equal(await cat.locator('.bar .fill').count() > 0, true, 'rows with nothing open stay plain bars');
+    assert.match(await cat.locator('.note').innerText(), /รวมทุกสถานะ ยกเว้นยกเลิก · รวมรายจ่ายที่ยังไม่เสร็จเดือนนี้ 599 บาท ซึ่งยอดสรุปด้านบนยังไม่นับ/);
+    assert.equal(await cat.locator('.legend').count(), 1);
+
+    const person = desk.locator('[data-fk="by-person"]');
+    assert.match(await person.locator('.bar', { hasText: 'พ่อ' }).locator('.bar-t').innerText(), /พ่อ[\s\S]*ยังไม่เสร็จ 599[\s\S]*4,289.50/);
+    assert.equal(await person.locator('.bar', { hasText: 'พ่อ' }).locator('.seg .open.alt').count(), 1);
+
+    const trend = desk.locator('[data-fk="trend"]');
+    assert.match(await trend.locator('.trend').getAttribute('aria-label'), /ก\.ย\. 2569 25,200 บาท \(ยังไม่เสร็จ 4,200\)/);
+    assert.equal(await trend.locator('.col.split').count(), 2, 'September and October have something open');
+    assert.equal(await trend.locator('.col.split').last().locator('.o').count(), 1);
+    assert.match(await trend.locator('.note').innerText(), /ส่วนลายทแยงคือรายการที่ยังไม่เสร็จ/);
+    assert.match(await text(desk, '.kpis'), /11,430.50/, 'the totals above are still the counted ones');
+    await desk.locator('.row-cards').screenshot({ path: path.join(SHOTS, 'desktop-dashboard-open-parts.png') });
+  });
+
   await step('desktop: status chips filter the items list and show how many each holds', async () => {
     await desk.locator('.pill', { hasText: 'รายการ' }).click();
     assert.deepEqual(await desk.locator('.chip').allInnerTexts(), ['ทั้งหมด\n11', 'รอดำเนินการ\n1', 'ชำระแล้ว\n9', 'ยกเลิก\n1']);
@@ -192,6 +215,41 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await shot(desk, 'desktop-items-filtered');
     await desk.locator('.chip', { hasText: 'ทั้งหมด' }).click();
     assert.equal(await desk.locator('.list .item').count(), 11);
+  });
+
+  await step('desktop: owner / type / category filters sit beside the status chips and say how many each leaves', async () => {
+    assert.deepEqual(await desk.locator('.fsel > span').allInnerTexts(), ['เจ้าของ', 'ประเภท', 'หมวดหมู่']);
+    const owner = desk.locator('[data-fk="filter:owner"]');
+    assert.deepEqual(await owner.locator('option').allInnerTexts(), ['ทุกคน (11)', 'น้องมิว (2)', 'พ่อ (4)', 'ยาย (0)', 'แม่ (5)']);
+    await owner.focus();
+    await owner.selectOption({ label: 'แม่ (5)' });
+    assert.equal(await desk.evaluate(() => document.activeElement.getAttribute('data-fk')), 'filter:owner', 'the control in use keeps the focus');
+    assert.match(await text(desk, '.page-h p'), /5 จาก 11 รายการ/);
+    assert.deepEqual(await desk.locator('.chip').allInnerTexts(), ['ทั้งหมด\n5', 'รอดำเนินการ\n0', 'ชำระแล้ว\n4', 'ยกเลิก\n1'], 'the chips count what the other filters leave');
+    assert.deepEqual(await desk.locator('[data-fk="filter:type"] option').allInnerTexts(), ['ทุกประเภท (5)', 'รายจ่าย (3)', 'รายรับ (2)']);
+    const groups = await desk.locator('[data-fk="filter:cat"] optgroup').evaluateAll((n) => n.map((g) => g.label));
+    assert.deepEqual(groups, ['รายจ่าย', 'รายรับ'], 'with no type chosen the categories are grouped by type');
+
+    await desk.locator('[data-fk="filter:type"]').selectOption({ label: 'รายจ่าย (3)' });
+    assert.equal(await desk.locator('[data-fk="filter:cat"] optgroup').count(), 0);
+    assert.deepEqual(await desk.locator('[data-fk="filter:cat"] option').allInnerTexts(), ['ทุกหมวดหมู่ (3)', 'อาหาร (1)', 'บ้านและสาธารณูปโภค (0)', 'เดินทาง (1)', 'สุขภาพ (0)', 'การศึกษา (1)', 'อื่น ๆ (0)']);
+    await desk.locator('[data-fk="filter:cat"]').selectOption({ label: 'เดินทาง (1)' });
+    assert.equal(await desk.locator('.list .item').count(), 1);
+    assert.match(await text(desk, '.list'), /จองโรงแรม/);
+    assert.equal(await desk.locator('.fsel select[data-on]').count(), 3, 'chosen filters are highlighted');
+    await shot(desk, 'desktop-items-filtered-more');
+
+    // a type that does not hold the chosen category drops the category instead of showing nothing, and says so up front
+    assert.deepEqual(await desk.locator('[data-fk="filter:type"] option').allInnerTexts(), ['ทุกประเภท (1)', 'รายจ่าย (1)', 'รายรับ (2)']);
+    await desk.locator('[data-fk="filter:type"]').selectOption({ label: 'รายรับ (2)' });
+    assert.equal(await desk.locator('[data-fk="filter:cat"]').inputValue(), 'all');
+    assert.equal(await desk.locator('.list .item').count(), 2);
+    await desk.locator('.chip', { hasText: 'ยกเลิก' }).click();
+    assert.match(await text(desk, '.list .empty'), /ไม่มีรายการที่ตรงกับตัวกรองในเดือนนี้ \(สถานะ ยกเลิก · เจ้าของ แม่ · ประเภท รายรับ\)/);
+    await desk.locator('.list .empty').getByRole('button', { name: 'ล้างตัวกรอง' }).click();
+    assert.equal(await desk.locator('.list .item').count(), 11);
+    assert.equal(await desk.locator('.fsel select[data-on]').count(), 0);
+    assert.equal(await desk.getByRole('button', { name: 'ล้างตัวกรอง' }).count(), 0, 'nothing to clear');
   });
 
   await step('desktop: marking a pending bill as paid moves it into the totals', async () => {
@@ -243,7 +301,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await desk.getByRole('button', { name: 'ย้ายรายการและลบสถานะ' }).click();
     await desk.getByRole('dialog').waitFor({ state: 'detached' });
     assert.equal(await desk.locator('.list .item', { hasText: /^ยกเลิก/ }).count(), 0);
-    assert.match(await text(desk, '.list'), /รอดำเนินการ[\s\S]*ไม่นับในยอดสรุป แต่นับในสัดส่วนทุกสถานะ · 1 รายการ/);
+    assert.match(await text(desk, '.list'), /รอดำเนินการ[\s\S]*ไม่นับในยอดสรุป แต่นับในสัดส่วนทุกสถานะ · 2 รายการ/, 'the moved one plus last month\'s open insurance bill');
   });
 
   await step('desktop: deleting a category that has items asks where to move them', async () => {
@@ -332,6 +390,7 @@ const text = (page, sel) => page.locator(sel).first().innerText();
   /* ---------- responsive sweep ---------- */
   await step('responsive: no sideways scrolling, 44px touch targets, from 320 to 1920 wide', async () => {
     const page = await open(browser, url, 'por@gmail.com', { width: 1280, height: 900 });
+    let filtered = false;
     for (const width of [320, 360, 390, 414, 600, 720, 721, 768, 820, 1024, 1280, 1440, 1920]) {
       await page.setViewportSize({ width, height: 900 });
       for (const tab of ['ภาพรวม', 'รายการ', 'ประเภท', 'หมวดหมู่', 'สถานะ', 'ผู้ใช้', 'ครอบครัว']) {
@@ -346,6 +405,10 @@ const text = (page, sel) => page.locator(sel).first().innerText();
           }
           : () => page.locator('.pill', { hasText: tab }).click();
         await nav();
+        if (tab === 'รายการ' && !filtered) {
+          await page.locator('[data-fk="filter:owner"]').selectOption({ index: 1 }); // keeps the "clear" button on screen too
+          filtered = true;
+        }
         const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         assert.ok(over <= 0, `${tab} @${width}: page is ${over}px wider than the screen`);
         const small = await page.evaluate(() => Array.from(document.querySelectorAll('button, a.skip, select, input'))

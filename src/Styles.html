@@ -116,6 +116,12 @@ button { cursor: pointer; background: none; border: 0; padding: 0; text-align: i
 .note a { color: var(--accent); }
 
 /* ---- status filter and the note under the totals ---- */
+.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 24px; }
+.fsels { flex: 1 1 480px; max-width: 760px; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px 12px; align-items: end; }
+.fsel { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); min-width: 0; }
+.fsel select { min-height: 44px; width: 100%; min-width: 0; padding: 0 10px; font-size: 14px; border: 1px solid var(--field); border-radius: 8px; background: var(--surface); color: var(--text); text-overflow: ellipsis; }
+.fsel select[data-on] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.fsels .clear { min-height: 44px; justify-self: start; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; border-radius: 999px; font-size: 14px; background: var(--surface); border: 1px solid var(--field); color: var(--text-2); }
 .chip:hover { background: var(--line-soft); }
@@ -138,6 +144,18 @@ button { cursor: pointer; background: none; border: 0; padding: 0; text-align: i
 .seg .done.exp { background: var(--expense); }
 .seg .open.inc, .sw.open { background: repeating-linear-gradient(135deg, var(--income) 0 3px, var(--income-soft) 3px 6px); }
 .seg .open.exp { background: repeating-linear-gradient(135deg, var(--expense) 0 3px, var(--expense-soft) 3px 6px); }
+.seg .done.cat { background: var(--accent); }
+.seg .done.alt { background: var(--income); }
+.seg .open.cat { background: repeating-linear-gradient(135deg, var(--accent) 0 3px, var(--accent-soft) 3px 6px); }
+.seg .open.alt { background: repeating-linear-gradient(135deg, var(--income) 0 3px, var(--income-soft) 3px 6px); }
+.bar-t small.op { color: var(--text-2); }
+.trend .col.split { display: flex; flex-direction: column; background: none; overflow: hidden; }
+.trend .col.split .o { flex: none; background: repeating-linear-gradient(135deg, var(--accent-bar) 0 3px, var(--surface) 3px 6px); }
+.trend .col.split .d { flex: 1 1 auto; background: var(--accent-bar); }
+.trend .col.now.split .o { background: repeating-linear-gradient(135deg, var(--accent) 0 3px, var(--accent-soft) 3px 6px); }
+.trend .col.now.split .d { background: var(--accent); }
+.legend.cat .sw.done { background: var(--accent); }
+.legend.cat .sw.open { background: repeating-linear-gradient(135deg, var(--accent) 0 3px, var(--accent-soft) 3px 6px); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); }
 .sw { display: inline-block; width: 16px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 

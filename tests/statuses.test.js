@@ -204,11 +204,14 @@ test('dashboard, family balance and per-person spend count only statuses that co
   const db = state.family.dashboard;
   assert.deepEqual([db.income, db.expense, db.balance, db.count, db.skipped], [5000, 1000, 4000, 2, 3]);
   assert.deepEqual(db.byCategory.map((r) => [r.name, r.amount]), [['อาหาร', 1000]]);
+  assert.deepEqual(db.byCategory.map((r) => [r.open, r.total]), [[400, 1400]], 'the pending bill rides beside it, the cancelled one is nowhere');
+  assert.deepEqual(db.byPerson.map((r) => [r.amount, r.open, r.total]), [[1000, 400, 1400]]);
   assert.equal(state.families[0].balance, 4000);
   assert.equal(state.family.members.find((m) => m.isMe).expense, 1000);
   assert.equal(state.family.items.length, 5, 'the list still shows every item');
   assert.equal(state.family.categories.find((c) => c.name === 'อาหาร').monthItems, 3, 'category item counts are about items, not money');
   assert.equal(db.trend.find((t) => t.current).expense, 1000);
+  assert.deepEqual([db.trend[5].open, db.trend[5].total], [400, 1400]);
 });
 
 test('the dashboard states which statuses it counts and what it left out', () => {

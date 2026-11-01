@@ -4,7 +4,7 @@
 (function () {
   'use strict';
   const ZB = window.ZB;
-  const { S, el, baht, fmtDate, monthLabel, ROLE, KIND } = ZB;
+  const { S, el, baht, fmtDate, monthLabel, ROLE, KIND, MEANING, meaningOf } = ZB;
 
   const NOUN = { items: 'รายการ', types: 'ประเภท', cats: 'หมวดหมู่', status: 'สถานะ', users: 'ผู้ใช้', fams: 'ครอบครัว' };
   const SAVE = { items: 'item.save', types: 'type.save', cats: 'category.save', status: 'status.save', users: 'user.save', fams: 'family.save' };
@@ -160,7 +160,8 @@
 
   /** A status that does not count says so in the picker, so the effect is known before saving. */
   function statusOptions(f) {
-    return f.statuses.map((s) => opt(s.id, s.name + (s.counted ? '' : ' (ไม่นับในยอดสรุป)')));
+    const note = { done: '', open: ' (ไม่นับในยอดสรุป)', cancelled: ' (ไม่นับเลย)' };
+    return f.statuses.map((s) => opt(s.id, s.name + note[meaningOf(s)]));
   }
 
   function itemFields(existing) {
@@ -200,11 +201,10 @@
     return [
       { name: 'name', label: 'ชื่อสถานะ', placeholder: 'เช่น รอดำเนินการ', maxLength: 30, value: existing ? existing.name : '', autofocus: true },
       {
-        name: 'counted', label: 'การนับในภาพรวม', type: 'select', value: existing ? String(existing.counted) : 'true',
-        options: [opt('true', 'นับรวมในยอดสรุป'), opt('false', 'ไม่นับรวม (ยังอยู่ในรายการ)')],
-        hint: existing && existing.itemCount > 0
-          ? 'มีผลย้อนหลังกับ ' + existing.itemCount + ' รายการที่ใช้สถานะนี้ ตัวเลขในภาพรวมจะเปลี่ยนทันที'
-          : 'รายการสถานะที่นับรวมจะถูกบวกเป็นรายรับ รายจ่าย และคงเหลือ'
+        name: 'meaning', label: 'ความหมายของสถานะ', type: 'select', value: existing ? meaningOf(existing) : 'done',
+        options: ['done', 'open', 'cancelled'].map((k) => opt(k, MEANING[k].option)),
+        hint: (existing && existing.itemCount > 0 ? 'มีผลย้อนหลังกับ ' + existing.itemCount + ' รายการที่ใช้สถานะนี้ ตัวเลขในภาพรวมจะเปลี่ยนทันที · ' : '') +
+          'เสร็จแล้ว: บวกในยอดสรุปและสัดส่วนทุกสถานะ · ยังไม่เสร็จ: บวกเฉพาะในสัดส่วนทุกสถานะ · ยกเลิก: ไม่บวกที่ไหนเลย'
       }
     ];
   }
@@ -309,10 +309,21 @@
     const body = Object.assign(base, v);
     if (existing) body[tab === 'users' ? 'userId' : 'id'] = tab === 'users' ? existing.userId : existing.id;
     if (tab === 'items') delete body.typeId;
+    if (tab === 'status') {
+      body.counted = v.meaning === 'done';
+      body.cancelled = v.meaning === 'cancelled';
+      delete body.meaning;
+    }
     if (tab === 'fams' && !v.addUserId) { delete body.addUserId; delete body.addRole; }
     if (tab === 'users' && existing && v.email === undefined) delete body.email;
     const monthBefore = S.data.meta.month;
-    await ZB.call(SAVE[tab], body);
+    try {
+      await ZB.call(SAVE[tab], body);
+    } catch (err) {
+      // both flags come from the one "meaning" select, so show the message under it
+      if (tab === 'status' && err.details && (err.details.field === 'counted' || err.details.field === 'cancelled')) err.details = { field: 'meaning' };
+      throw err;
+    }
     // say where the thing went when it is no longer on the screen the person was looking at
     if (tab === 'fams' && !existing) return 'สร้างครอบครัว “' + v.name + '” แล้ว กำลังแสดงครอบครัวนี้';
     if (tab === 'items' && v.date.slice(0, 7) !== monthBefore) return 'บันทึกแล้ว รายการนี้อยู่ในเดือน ' + monthLabel(v.date.slice(0, 7));

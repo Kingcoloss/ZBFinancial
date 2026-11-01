@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   const ZB = window.ZB;
-  const { S, el, icon, baht, short, fmtDate, monthLabel, clock, ROLE, KIND } = ZB;
+  const { S, el, icon, baht, short, fmtDate, monthLabel, clock, ROLE, KIND, MEANING, meaningOf } = ZB;
 
   const NAV = [
     ['dash', 'ภาพรวม'],
@@ -50,10 +50,18 @@
 
     const main = el('main', { class: 'main', id: 'main', tabindex: '-1' }, fam ? page(d) : onboarding());
 
+    // a filter or chip that was in use stays in use after the screen is rebuilt (keyboard users keep their place)
+    const active = document.activeElement;
+    const fk = active && active !== document.body && root.contains(active) ? active.getAttribute('data-fk') : null;
+
     root.replaceChildren(
       el('a', { class: 'skip', href: '#main', onClick: (e) => { e.preventDefault(); main.focus(); } }, 'ข้ามไปยังเนื้อหา'),
       header, main, fam && tabbar(fam)
     );
+    if (fk) {
+      const again = Array.from(root.querySelectorAll('[data-fk]')).find((n) => n.getAttribute('data-fk') === fk);
+      if (again) again.focus({ preventScroll: true });
+    }
   }
 
   function tabbar(fam) {
@@ -101,22 +109,47 @@
       el('button', { 'aria-label': 'เดือนถัดไป', disabled: !newer, onClick: () => setMonth(newer.value) }, icon('right', 20)));
   }
 
+  /**
+   * One breakdown row. The solid part is what the totals count; when the row also has items still open
+   * (same idea as the ratio card) they follow as a striped part and the label says how much.
+   */
   function bar(row, cls, showShare) {
+    const open = row.open > 0;
+    const tone = cls || 'cat';
     return el('div', { class: 'bar' },
       el('div', { class: 'bar-t' },
-        el('span', {}, row.name, showShare && el('small', {}, row.share + '%')),
-        el('span', {}, baht(row.amount))),
-      el('div', { class: 'track', 'aria-hidden': 'true' }, el('div', { class: 'fill ' + (cls || ''), style: { width: row.pct + '%' } })));
+        el('span', {}, row.name, showShare && el('small', {}, row.share + '%'), open && el('small', { class: 'op' }, 'ยังไม่เสร็จ ' + baht(row.open))),
+        el('span', {}, baht(row.total))),
+      el('div', { class: 'track', 'aria-hidden': 'true' },
+        open
+          ? el('div', { class: 'seg', style: { width: row.pct + '%' } },
+            row.amount > 0 && el('span', { class: 'done ' + tone, style: { width: row.donePct + '%' } }),
+            el('span', { class: 'open ' + tone }))
+          : el('div', { class: 'fill ' + (cls || ''), style: { width: row.pct + '%' } })));
+  }
+
+  /** Under a chart that holds open items: what the stripes are, and what the totals above leave out. */
+  function openKey(tone, text) {
+    return [
+      el('p', { class: 'legend ' + tone, 'aria-hidden': 'true' },
+        el('span', {}, el('i', { class: 'sw done' }), 'นับในยอดสรุปแล้ว'),
+        el('span', {}, el('i', { class: 'sw open' }), 'ยังไม่เสร็จ')),
+      el('p', { class: 'note' }, text)
+    ];
   }
 
   function itemTitle(i) {
     return { title: i.name, sub: i.categoryName + ' · ' + i.ownerName + ' · ' + fmtDate(i.date) };
   }
 
-  /** Status chip: blue when the status counts towards the totals, grey and dashed when it does not. */
+  /** Status chip: blue when it counts in the totals, dashed when still open, solid grey when cancelled. */
   function statusTag(i) {
-    return el('span', { class: 'tag st' + (i.counted ? '' : ' off'), title: i.counted ? 'นับรวมในยอดสรุป' : 'ไม่นับรวมในยอดสรุป' }, i.statusName);
+    const m = MEANING[meaningOf(i)];
+    return el('span', { class: 'tag ' + m.cls, title: m.label + ': ' + m.sub }, i.statusName);
   }
+
+  /** Amount colour: normal, muted (open: only in the all-status ratio) or struck through (cancelled). */
+  const amtOff = (i) => (i.cancelled ? ' void' : i.counted ? '' : ' off');
 
   function rowView(r) {
     return el('div', { class: 'item' + (r.current ? ' cur' : ''), 'aria-current': r.current ? 'true' : null },
@@ -145,20 +178,24 @@
         kpi('รายจ่าย', db.expense, 'var(--expense)'),
         kpi('คงเหลือ', db.balance, db.balance < 0 ? 'var(--danger)' : 'var(--accent)')),
       db.scope && el('p', { class: 'scope', 'data-fk': 'scope' }, icon('info', 18), el('span', {}, db.scope.text)),
+      db.overall && overall(db.overall),
       el('div', { class: 'row-cards' },
-        el('section', { class: 'card card-p' },
+        el('section', { class: 'card card-p', 'data-fk': 'by-category' },
           el('h2', {}, 'รายจ่ายตามหมวด'),
-          db.byCategory.length ? db.byCategory.map((r) => bar(r, '', true)) : el('p', { class: 'lead' }, 'ยังไม่มีรายจ่ายในเดือนนี้')),
-        el('section', { class: 'card card-p' },
+          db.byCategory.length ? db.byCategory.map((r) => bar(r, '', true)) : el('p', { class: 'lead' }, 'ยังไม่มีรายจ่ายในเดือนนี้'),
+          openSum(db.byCategory) > 0 && openKey('cat', openText(db.byCategory, when))),
+        el('section', { class: 'card card-p', 'data-fk': 'by-person' },
           el('h2', {}, 'รายจ่ายแยกตามคน'),
-          db.byPerson.length ? db.byPerson.map((r) => bar(r, 'alt', true)) : el('p', { class: 'lead' }, 'ยังไม่มีรายจ่ายในเดือนนี้')),
-        el('section', { class: 'card card-p' },
+          db.byPerson.length ? db.byPerson.map((r) => bar(r, 'alt', true)) : el('p', { class: 'lead' }, 'ยังไม่มีรายจ่ายในเดือนนี้'),
+          openSum(db.byPerson) > 0 && openKey('alt', openText(db.byPerson, when))),
+        el('section', { class: 'card card-p', 'data-fk': 'trend' },
           el('h2', {}, 'แนวโน้มรายจ่าย 6 เดือน'),
-          trend(db.trend))),
+          trend(db.trend),
+          openSum(db.trend) > 0 && openKey('cat', 'แท่งสูงเท่ารายจ่ายรวมทุกสถานะ ยกเว้นยกเลิก · ส่วนลายทแยงคือรายการที่ยังไม่เสร็จ ยอดสรุปด้านบนยังไม่นับ'))),
       el('section', { class: 'card list recent' },
         el('h2', {}, 'รายการล่าสุด'),
         recent.length
-          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, status: statusTag(i), amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off') })))
+          ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, status: statusTag(i), amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + amtOff(i) })))
           : emptyBlock('ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย', f.can.addItem && { label: '+ เพิ่มรายการ', run: () => ZB.forms.add('items') }),
         recent.length > 0 && el('div', { class: 'empty', style: { padding: '8px' } },
           el('button', { class: 'act', onClick: () => go('items') }, 'ดูรายการทั้งหมด'))),
@@ -166,16 +203,48 @@
     ];
   }
 
+  /** Income against expense with every status except cancelled; the striped part is what is still open. */
+  function overall(o) {
+    const bar = (b) => {
+      const cls = b.kind === 'INCOME' ? 'inc' : 'exp';
+      return el('div', { class: 'bar' },
+        el('div', { class: 'bar-t' },
+          el('span', {}, b.label, b.open > 0 && el('small', {}, 'ยังไม่เสร็จ ' + baht(b.open))),
+          el('span', {}, baht(b.total))),
+        el('div', { class: 'track', 'aria-hidden': 'true' },
+          el('div', { class: 'seg', style: { width: b.pct + '%' } },
+            el('span', { class: 'done ' + cls, style: { width: b.donePct + '%' } }),
+            el('span', { class: 'open ' + cls }))));
+    };
+    return el('section', { class: 'card card-p overall', 'data-fk': 'overall' },
+      el('h2', {}, 'สัดส่วนรายรับ–รายจ่าย · รวมทุกสถานะ ยกเว้นยกเลิก'),
+      el('div', { class: 'ov' },
+        el('div', { class: 'ov-r' }, el('b', {}, o.ratio === null ? '–' : o.ratio + '%'), el('span', {}, 'รายจ่ายต่อรายรับ')),
+        el('div', { class: 'ov-b' }, o.bars.map(bar))),
+      el('p', { class: 'lead' }, o.text),
+      o.openCount > 0 && el('p', { class: 'legend', 'aria-hidden': 'true' },
+        el('span', {}, el('i', { class: 'sw done' }), 'นับในยอดสรุปแล้ว'),
+        el('span', {}, el('i', { class: 'sw open' }), 'ยังไม่เสร็จ')),
+      el('p', { class: 'note' }, o.note));
+  }
+
   function kpi(label, value, color) {
     return el('div', { class: 'card kpi' }, el('div', { class: 'l' }, label), el('div', { class: 'v', style: { color: color } }, baht(value)));
   }
 
+  const openSum = (rows) => rows.reduce((sum, r) => sum + r.open, 0);
+  const openText = (rows, when) =>
+    'รวมทุกสถานะ ยกเว้นยกเลิก · รวมรายจ่ายที่ยังไม่เสร็จ' + when + ' ' + baht(Math.round(openSum(rows) * 100) / 100) + ' บาท ซึ่งยอดสรุปด้านบนยังไม่นับ';
+
+  /** Six columns: the counted expense is solid, what is still open sits on top of it, striped. */
   function trend(rows) {
-    const text = rows.map((r) => monthLabel(r.month) + ' ' + baht(r.expense) + ' บาท').join(', ');
+    const text = rows.map((r) => monthLabel(r.month) + ' ' + baht(r.total) + ' บาท' + (r.open > 0 ? ' (ยังไม่เสร็จ ' + baht(r.open) + ')' : '')).join(', ');
     return el('div', { class: 'trend', role: 'img', 'aria-label': 'รายจ่าย 6 เดือน: ' + text },
       rows.map((r) => el('div', {},
-        el('span', { class: 'tv', title: baht(r.expense) + ' บาท' }, r.expense > 0 ? short(r.expense) : ''),
-        el('div', { class: 'col' + (r.current ? ' now' : ''), style: { height: r.pct * 0.72 + '%' } }),
+        el('span', { class: 'tv', title: baht(r.total) + ' บาท' + (r.open > 0 ? ' · ยังไม่เสร็จ ' + baht(r.open) : '') }, r.total > 0 ? short(r.total) : ''),
+        el('div', { class: 'col' + (r.current ? ' now' : '') + (r.open > 0 ? ' split' : ''), style: { height: r.pct * 0.72 + '%' } },
+          r.open > 0 && el('span', { class: 'o', style: { height: 100 - r.donePct + '%' } }),
+          r.open > 0 && r.expense > 0 && el('span', { class: 'd' })),
         el('small', {}, r.label))));
   }
 
@@ -195,7 +264,7 @@
     const f = d.family;
     const can = f.can;
     const month = monthLabel(d.meta.month);
-    const shown = S.statusFilter === 'all' ? f.items : f.items.filter((i) => i.statusId === S.statusFilter);
+    const shown = passing(f, null);
     const edit = (tab, id) => ({ label: 'แก้ไข', run: () => ZB.forms.edit(tab, id) });
     const del = (tab, id) => ({ label: 'ลบ', cls: 'del', run: () => ZB.forms.remove(tab, id) });
 
@@ -205,14 +274,14 @@
         hint: 'รายรับรายจ่ายแต่ละครั้ง มีเจ้าของเป็นผู้ใช้หนึ่งคน · แสดงเดือน ' + month + ' (' +
           (shown.length === f.items.length ? f.items.length + ' รายการ' : shown.length + ' จาก ' + f.items.length + ' รายการ') + ')',
         add: can.addItem && '+ เพิ่มรายการ',
-        empty: f.items.length ? 'ไม่มีรายการสถานะ “' + filterName(f) + '” ในเดือนนี้' : 'ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย',
-        emptyAction: f.items.length ? { label: 'ดูทุกสถานะ', run: () => setFilter('all') } : null,
-        filters: statusChips(f),
+        empty: f.items.length ? 'ไม่มีรายการที่ตรงกับตัวกรองในเดือนนี้ (' + describeFilters(f) + ')' : 'ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย',
+        emptyAction: f.items.length ? { label: 'ล้างตัวกรอง', run: clearFilters } : null,
+        filters: itemFilters(f),
         rows: shown.map((i) => Object.assign(itemTitle(i), {
           id: i.id,
           tag: KIND[i.kind].label, tagCls: KIND[i.kind].cls,
           status: statusTag(i),
-          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off'),
+          amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + amtOff(i),
           actions: i.canEdit ? [{ label: 'สถานะ', run: () => ZB.forms.setStatus(i.id) }, edit('items', i.id), del('items', i.id)] : []
         }))
       },
@@ -245,17 +314,20 @@
       },
       status: {
         title: 'สถานะ (Status)',
-        hint: 'บอกว่ารายการอยู่ขั้นไหน เช่น รอดำเนินการ หรือชำระแล้ว · สถานะที่ “นับรวม” จะถูกบวกในภาพรวม ส่วนที่ไม่นับจะไม่ถูกบวกแต่ยังเห็นในรายการ',
+        hint: 'บอกว่ารายการอยู่ขั้นไหน · เสร็จแล้ว = นับในยอดสรุป · ยังไม่เสร็จ = นับเฉพาะในสัดส่วนรายรับ–รายจ่ายรวมทุกสถานะ · ยกเลิก = ไม่นับเลย แต่ยังเห็นในรายการ',
         add: can.manageStructure && '+ เพิ่มสถานะ',
         empty: 'ยังไม่มีสถานะ เพิ่มสถานะแรกเพื่อติดตามความคืบหน้าของรายการ',
         noMonth: true,
-        rows: f.statuses.map((s) => ({
-          id: s.id,
-          title: s.name,
-          sub: (s.counted ? 'นับรวมในยอดสรุป' : 'ไม่นับรวมในยอดสรุป') + ' · ' + s.itemCount + ' รายการ' + (s.id === f.defaultStatusId ? ' · เริ่มต้นของรายการใหม่' : ''),
-          tag: s.counted ? 'นับรวม' : 'ไม่นับรวม', tagCls: s.counted ? 'st' : 'st off',
-          actions: can.manageStructure ? [edit('status', s.id), del('status', s.id)] : []
-        }))
+        rows: f.statuses.map((s) => {
+          const m = MEANING[meaningOf(s)];
+          return {
+            id: s.id,
+            title: s.name,
+            sub: m.sub + ' · ' + s.itemCount + ' รายการ' + (s.id === f.defaultStatusId ? ' · เริ่มต้นของรายการใหม่' : ''),
+            tag: m.label, tagCls: m.cls,
+            actions: can.manageStructure ? [edit('status', s.id), del('status', s.id)] : []
+          };
+        })
       },
       users: {
         title: 'ผู้ใช้ (User)',
@@ -289,28 +361,93 @@
     };
   }
 
-  /* ---- status filter on the items list ---- */
+  /* ---- filters on the items list: status chips, then owner / type / category ---- */
 
-  function setFilter(id) {
-    S.statusFilter = id;
+  const NONE = { status: 'all', owner: 'all', type: 'all', cat: 'all' };
+  const FIELD = { status: 'statusId', owner: 'ownerId', type: 'typeId', cat: 'categoryId' };
+  const filtering = () => Object.keys(NONE).some((k) => S.filter[k] !== 'all');
+
+  /** The month's items that pass every filter except `skip` (and `skip2`), so each choice can say how many it would leave. */
+  function passing(f, skip, skip2) {
+    return f.items.filter((i) => Object.keys(FIELD).every((k) => k === skip || k === skip2 || S.filter[k] === 'all' || i[FIELD[k]] === S.filter[k]));
+  }
+
+  function tally(items, key) {
+    const n = {};
+    items.forEach((i) => { n[i[key]] = (n[i[key]] || 0) + 1; });
+    return n;
+  }
+
+  function setFilter(key, value) {
+    S.filter[key] = value;
+    const c = key === 'type' && value !== 'all' && S.data.family.categories.find((x) => x.id === S.filter.cat);
+    if (c && c.typeId !== value) S.filter.cat = 'all'; // that category is not under the chosen type
     ZB.render();
   }
 
-  function filterName(f) {
-    const s = f.statuses.find((x) => x.id === S.statusFilter);
-    return s ? s.name : '';
+  function clearFilters() {
+    Object.assign(S.filter, NONE);
+    ZB.render();
+  }
+
+  /** "สถานะ ยกเลิก · เจ้าของ แม่", for the message when nothing matches. */
+  function describeFilters(f) {
+    const name = {
+      status: (id) => (f.statuses.find((x) => x.id === id) || {}).name,
+      owner: (id) => (f.members.find((x) => x.userId === id) || {}).name,
+      type: (id) => (f.types.find((x) => x.id === id) || {}).name,
+      cat: (id) => (f.categories.find((x) => x.id === id) || {}).name
+    };
+    const label = { status: 'สถานะ', owner: 'เจ้าของ', type: 'ประเภท', cat: 'หมวดหมู่' };
+    return Object.keys(NONE).filter((k) => S.filter[k] !== 'all').map((k) => label[k] + ' ' + name[k](S.filter[k])).join(' · ');
   }
 
   /** One chip per status with how many items of the month it holds; the pressed one is the filter. */
   function statusChips(f) {
-    if (!f.statuses.length || !f.items.length) return null;
-    const count = (id) => f.items.filter((i) => i.statusId === id).length;
-    const chip = (id, text, n) => el('button', {
-      class: 'chip', 'data-fk': 'chip:' + id, 'aria-pressed': String(S.statusFilter === id), onClick: () => setFilter(id)
-    }, text, el('small', {}, String(n)));
+    if (!f.statuses.length) return null;
+    const rows = passing(f, 'status');
+    const n = tally(rows, 'statusId');
+    const chip = (id, text, count) => el('button', {
+      class: 'chip', 'data-fk': 'chip:' + id, 'aria-pressed': String(S.filter.status === id), onClick: () => setFilter('status', id)
+    }, text, el('small', {}, String(count)));
     return el('div', { class: 'chips', role: 'group', 'aria-label': 'กรองตามสถานะ' },
-      chip('all', 'ทั้งหมด', f.items.length),
-      f.statuses.map((s) => chip(s.id, s.name, count(s.id))));
+      chip('all', 'ทั้งหมด', rows.length),
+      f.statuses.map((s) => chip(s.id, s.name, n[s.id] || 0)));
+  }
+
+  /** A drop-down filter; `count` is how many items each choice would show with the other filters kept. */
+  function dropdown(key, label, allText, rows, groups) {
+    const option = (value, text) => el('option', { value, selected: S.filter[key] === value }, text);
+    return el('label', { class: 'fsel' },
+      el('span', {}, label),
+      el('select', { 'data-fk': 'filter:' + key, 'data-on': S.filter[key] !== 'all', onChange: (e) => setFilter(key, e.target.value) },
+        option('all', allText + ' (' + rows.length + ')'),
+        groups.map((g) => (g.label
+          ? el('optgroup', { label: g.label }, g.items.map((x) => option(x.value, x.text)))
+          : g.items.map((x) => option(x.value, x.text))))));
+  }
+
+  function itemFilters(f) {
+    if (!f.items.length) return null;
+    const count = (key, field) => tally(passing(f, key), field);
+    const owners = count('owner', 'ownerId');
+    // choosing another type drops a category that is not under it, so only that type's own category narrows its count
+    const catType = (f.categories.find((c) => c.id === S.filter.cat) || {}).typeId;
+    const types = tally(passing(f, 'type', 'cat'), 'typeId');
+    if (catType) types[catType] = passing(f, 'type').filter((i) => i.typeId === catType).length;
+    const cats = count('cat', 'categoryId');
+    const entry = (value, name, n) => ({ value, text: name + ' (' + (n[value] || 0) + ')' });
+    const inType = (t) => f.categories.filter((c) => c.typeId === t.id).map((c) => entry(c.id, c.name, cats));
+    const catGroups = S.filter.type === 'all'
+      ? f.types.map((t) => ({ label: t.name, items: inType(t) })).filter((g) => g.items.length)
+      : [{ items: inType(f.types.find((t) => t.id === S.filter.type)) }];
+    return el('div', { class: 'filters', 'data-fk': 'filters' },
+      statusChips(f),
+      el('div', { class: 'fsels' },
+        dropdown('owner', 'เจ้าของ', 'ทุกคน', passing(f, 'owner'), [{ items: f.members.map((m) => entry(m.userId, m.name, owners)) }]),
+        dropdown('type', 'ประเภท', 'ทุกประเภท', passing(f, 'type'), [{ items: f.types.map((t) => entry(t.id, t.name, types)) }]),
+        dropdown('cat', 'หมวดหมู่', 'ทุกหมวดหมู่', passing(f, 'cat'), catGroups),
+        filtering() && el('button', { class: 'btn ghost clear', 'data-fk': 'filter-clear', onClick: clearFilters }, 'ล้างตัวกรอง')));
   }
 
   function page(d) {

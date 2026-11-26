@@ -199,6 +199,7 @@ var Views = {
       }),
       defaultStatusId: (Statuses.defaultOf(familyStatuses) || {}).id || '',
       items: monthItems.map(strip),
+      itemMonths: Views.monthCounts_(familyItems),
       dashboard: Dashboard.compute({
         items: enriched,
         statuses: familyStatuses.map(function (s) { return { id: s.id, name: s.name, counted: s.counted }; }),
@@ -219,6 +220,18 @@ var Views = {
       list.sort(function (a, b) { return Util.byText(b, a); });
     }
     return list.map(function (m) { return { value: m, label: Util.monthLabel(m) }; });
+  },
+
+  /** Months that hold at least one item and how many, newest first: where items can be copied from. */
+  monthCounts_: function (items) {
+    var counts = {};
+    items.forEach(function (i) {
+      var m = i.date.slice(0, 7);
+      if (Util.isMonth(m)) counts[m] = (counts[m] || 0) + 1;
+    });
+    return Object.keys(counts)
+      .sort(function (a, b) { return Util.byText(b, a); })
+      .map(function (m) { return { month: m, count: counts[m] }; });
   },
 
   sheetUrl_: function () {

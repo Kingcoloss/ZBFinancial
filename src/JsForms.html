@@ -59,8 +59,9 @@
 
   /**
    * cfg: title, intro (text), fields[], submit (label; null = info only), danger, success (toast text),
-   *      onSubmit(values) -> Promise. field: name, label, type, value, placeholder, options, disabled,
-   *      hint, optional, maxLength, inputMode, autofocus, onChange(value, ctx).
+   *      onSubmit(values) -> Promise, extra(slot, ctx) + extraAfter (field name): custom content that
+   *      sits under that field, ctx.submit is the submit button. field: name, label, type, value,
+   *      placeholder, options, disabled, hint, optional, maxLength, inputMode, autofocus, onChange(value, ctx).
    */
   function openForm(cfg) {
     const inputs = {};
@@ -77,7 +78,8 @@
       }
     };
 
-    const form = el('form', { class: 'dlg-b', novalidate: true });
+    const form = el('form', { class: 'dlg-b' + (cfg.extra ? ' long' : ''), novalidate: true });
+    const slot = cfg.extra ? el('div', { class: 'slot' }) : null;
     if (cfg.intro) form.append(el('p', {}, cfg.intro));
     (cfg.fields || []).forEach((f) => {
       const id = 'f-' + f.name;
@@ -97,13 +99,18 @@
       errors[f.name] = err;
       hints[f.name] = hint;
       form.append(el('label', { class: 'fld', for: id }, el('span', {}, f.label + (f.optional ? ' (ไม่บังคับ)' : '')), input, hint, err));
+      if (slot && cfg.extraAfter === f.name) form.append(slot);
     });
+    if (slot && !slot.parentNode) form.append(slot);
 
     const banner = el('div', { class: 'banner', role: 'alert' });
     const submit = cfg.submit ? el('button', { type: 'submit', class: 'btn' + (cfg.danger ? ' danger' : '') }, cfg.submit) : null;
     form.append(banner, el('div', { class: 'foot' },
       el('button', { type: 'button', class: 'btn ghost', onClick: closeModal }, cfg.submit ? 'ยกเลิก' : 'ปิด'),
       submit));
+
+    ctx.submit = submit;
+    if (cfg.extra) cfg.extra(slot, ctx);
 
     function showError(name, message) {
       const input = inputs[name];
@@ -419,6 +426,158 @@
     });
   }
 
+  /* ---- copy items from another month ---- */
+
+  /** The status the copies start in: one that is still to be done, because last month's paid bill is not yet paid this month. */
+  function importStatusId(f) {
+    const open = f.statuses.find((s) => !s.counted && !s.cancelled);
+    return open ? open.id : f.defaultStatusId;
+  }
+
+  function statusEffect(f, id) {
+    const s = f.statuses.find((x) => x.id === id);
+    if (!s) return '';
+    return s.counted
+      ? 'สถานะนี้นับรวมในยอดสรุป รายการที่นำเข้าจะถูกบวกในภาพรวมทันที'
+      : 'สถานะนี้ไม่นับรวมในยอดสรุป รายการจะยังไม่ถูกบวกในภาพรวมจนกว่าจะเปลี่ยนสถานะ (ปุ่ม “สถานะ” ในแถวรายการ)';
+  }
+
+  function importItems() {
+    const d = S.data;
+    const f = d.family;
+    const target = d.meta.month;
+    const months = f.itemMonths.filter((m) => m.month !== target);
+    if (!months.length) {
+      return info('ยังไม่มีรายการให้นำเข้า', 'เดือนอื่นยังไม่มีรายการเลย บันทึกรายการของเดือนนี้ก่อน แล้วเดือนหน้าจะนำกลับมาใช้ซ้ำได้จากปุ่มนี้');
+    }
+    // the month just before the one on screen, else the nearest one that has anything
+    const first = months.find((m) => m.month < target) || months[0];
+    const statusId = importStatusId(f);
+
+    let items = [];
+    let picked = new Set();
+    let token = 0;
+    let loading = true;
+    let failed = '';
+    let draw = () => {};
+    let load = () => {};
+
+    openForm({
+      title: 'นำเข้ารายการจากเดือนอื่น',
+      intro: 'คัดลอกรายการที่เกิดซ้ำทุกเดือน เช่น ค่าเช่าบ้านหรือเงินเดือน มาไว้ในเดือน ' + monthLabel(target) + ' วันที่เป็นวันเดิมของเดือนนี้ และรายการของเดือนเดิมไม่ถูกแก้ไข',
+      fields: [
+        {
+          name: 'month', label: 'นำเข้าจากเดือน', type: 'select', value: first.month,
+          options: months.map((m) => opt(m.month, monthLabel(m.month) + ' · ' + m.count + ' รายการ')),
+          onChange: (v) => load(v)
+        },
+        {
+          name: 'statusId', label: 'สถานะของรายการที่นำเข้า', type: 'select', value: statusId, options: statusOptions(f),
+          optional: !f.statuses.length, hint: statusEffect(f, statusId),
+          onChange: (v, ctx) => ctx.setHint('statusId', statusEffect(f, v))
+        }
+      ],
+      extraAfter: 'month',
+      extra: (slot, ctx) => build(slot, ctx),
+      submit: 'นำเข้า',
+      onSubmit: async (v) => {
+        const ids = items.filter((i) => picked.has(i.id)).map((i) => i.id);
+        if (!ids.length) throw new Error('กรุณาเลือกรายการที่จะนำเข้าอย่างน้อย 1 รายการ');
+        try {
+          const { result } = await ZB.call('item.import', { familyId: f.id, month: v.month, toMonth: target, ids, statusId: v.statusId });
+          const st = S.data.family.statuses.find((x) => x.id === result.statusId);
+          return 'นำเข้า ' + result.count + ' รายการจาก ' + monthLabel(v.month) + ' แล้ว' +
+            (st && !st.counted ? ' · สถานะ “' + st.name + '” ยังไม่นับในยอดสรุป' : '');
+        } catch (err) {
+          // the list may be out of date (an item was deleted meanwhile): show what is there now, keep the ticks otherwise
+          if (err.code === 'NOT_FOUND' || err.code === 'CONFLICT') load(v.month);
+          throw err;
+        }
+      }
+    });
+
+    function build(slot, ctx) {
+      const list = el('div', { class: 'picks-l' });
+      const count = el('small', { class: 'n', 'aria-live': 'polite' });
+      const toggle = el('button', { type: 'button', class: 'act' });
+      const note = el('p', { class: 'picks-n', role: 'status' });
+      const retry = el('button', { type: 'button', class: 'act', onClick: () => load(ctx.get('month')) }, 'ลองอีกครั้ง');
+      const head = el('div', { class: 'picks-h' }, el('div', {}, el('b', { id: 'pk-h' }, 'เลือกรายการที่จะนำเข้า'), count), toggle);
+      slot.append(el('div', { class: 'picks', role: 'group', 'aria-labelledby': 'pk-h' }, head, note, list));
+
+      const can = () => items.filter((i) => i.importable);
+
+      function update() {
+        const n = picked.size;
+        const ready = !loading && !failed;
+        count.textContent = ready ? 'เลือกแล้ว ' + n + ' จาก ' + can().length + ' รายการ' : '';
+        toggle.hidden = !ready || !can().length;
+        toggle.textContent = n === can().length ? 'ไม่เลือกเลย' : 'เลือกทั้งหมด';
+        ctx.submit.textContent = n > 0 ? 'นำเข้า ' + n + ' รายการ' : 'นำเข้า';
+        ctx.submit.disabled = !ready || n === 0;
+      }
+
+      toggle.addEventListener('click', () => {
+        picked = picked.size === can().length ? new Set() : new Set(can().map((i) => i.id));
+        draw();
+      });
+
+      draw = () => {
+        note.replaceChildren();
+        if (loading) note.append('กำลังดึงรายการของเดือนนี้…');
+        else if (failed) note.append(failed + ' ', retry);
+        else if (!items.length) note.append('เดือนนี้ไม่มีรายการแล้ว ลองเลือกเดือนอื่น');
+        else if (!can().length) note.append('ไม่มีรายการที่นำเข้าได้ สมาชิกนำเข้าได้เฉพาะรายการของตัวเอง');
+        note.hidden = !note.childNodes.length;
+        list.replaceChildren(...(loading || failed ? [] : items.map(row)));
+        list.hidden = !list.childNodes.length;
+        update();
+      };
+
+      function row(i) {
+        const box = el('input', { type: 'checkbox', disabled: !i.importable, checked: picked.has(i.id) });
+        box.addEventListener('change', () => {
+          if (box.checked) picked.add(i.id); else picked.delete(i.id);
+          update();
+        });
+        const why = !i.importable ? i.reason : i.exists ? 'มีในเดือนนี้แล้ว จึงไม่ได้เลือกไว้ให้' : '';
+        const when = (fmtDate(i.date) + ' → ' + fmtDate(i.newDate)).replace(/ /g, '\u00a0'); // wrap between facts, not inside a date
+        return el('label', { class: 'pick' + (i.importable ? '' : ' off') },
+          box,
+          el('span', { class: 't' },
+            el('b', {}, i.name),
+            el('small', {}, i.categoryName + ' · ' + i.ownerName + ' · ' + when),
+            why && el('small', { class: 'why' }, why)),
+          el('span', { class: 'amt ' + KIND[i.kind].cls }, KIND[i.kind].sign + baht(i.amount)));
+      }
+
+      load = (month) => {
+        const mine = ++token;
+        loading = true;
+        failed = '';
+        items = [];
+        picked = new Set();
+        draw();
+        ZB.call('item.source', { familyId: f.id, month, toMonth: target })
+          .then(({ result }) => {
+            if (mine !== token) return;
+            loading = false;
+            items = result.items;
+            // tick what is new here; what the month already holds is left for the person to choose
+            picked = new Set(items.filter((i) => i.importable && !i.exists).map((i) => i.id));
+            draw();
+          })
+          .catch((err) => {
+            if (mine !== token) return;
+            loading = false;
+            failed = err.message;
+            draw();
+          });
+      };
+      load(first.month);
+    }
+  }
+
   /* ---- which family, which month ---- */
 
   function openView() {
@@ -446,6 +605,6 @@
     ZB.call('state', {}).then(() => ZB.toast('กำลังแสดง “' + S.data.family.name + '”')).catch((e) => ZB.toast(e.message, true));
   }
 
-  ZB.forms = { add, edit, remove, setStatus, openView, switchFamily };
+  ZB.forms = { add, edit, remove, setStatus, importItems, openView, switchFamily };
 })();
 </script>

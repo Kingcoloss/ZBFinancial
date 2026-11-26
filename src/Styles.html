@@ -173,6 +173,30 @@ button { cursor: pointer; background: none; border: 0; padding: 0; text-align: i
 .foot { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding-top: 4px; }
 .foot .btn { flex: 0 1 auto; }
 .foot .btn:not(.ghost) { flex: 1 1 140px; max-width: 220px; }
+/* a dialog with a long list keeps its buttons in reach instead of scrolling them away */
+.long .foot { position: sticky; bottom: 0; z-index: 1; margin: 0 -20px -20px; padding: 12px 20px 20px; background: var(--surface); border-top: 1px solid var(--line); }
+
+/* ---- copying items from another month: a tick list inside the dialog ---- */
+.slot { flex: 1 1 100%; min-width: 0; }
+.picks { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.picks-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 4px 4px 14px; min-height: 52px; background: var(--line-soft); font-size: 13px; color: var(--text-2); }
+.picks-h b { display: block; font-weight: 600; font-size: 14px; color: var(--text); }
+.picks-h small { display: block; font-size: 12px; color: var(--muted); }
+.picks-h .act { flex: none; }
+.picks-n { padding: 14px; font-size: 14px; color: var(--text-2); }
+.picks-n .act { display: inline-flex; vertical-align: middle; }
+.picks-l { max-height: min(44vh, 340px); overflow: auto; }
+.pick { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 14px; border-top: 1px solid var(--line-soft); cursor: pointer; }
+.pick:hover { background: #F8FAFF; }
+.pick input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+.pick .t { flex: 1 1 auto; min-width: 0; }
+.pick .t b { display: block; font-weight: 500; font-size: 15px; overflow-wrap: anywhere; }
+.pick .t small { display: block; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.pick .t .why { color: var(--expense-ink); }
+.pick .amt { flex: none; min-width: 0; }
+.pick.off { cursor: default; }
+.pick.off:hover { background: none; }
+.pick.off .t b, .pick.off .amt { color: var(--muted); }
 
 .toast { position: fixed; left: 50%; bottom: 24px; z-index: 60; transform: translateX(-50%); max-width: min(92vw, 520px); pointer-events: none; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .toast p { background: #111827; color: #fff; padding: 12px 16px; border-radius: 10px; font-size: 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }

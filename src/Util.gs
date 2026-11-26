@@ -71,6 +71,16 @@ var Util = {
     return y + '-' + (m < 9 ? '0' : '') + (m + 1);
   },
 
+  daysInMonth: function (month) {
+    return new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+  },
+
+  /** The same day of the month in another month; a day it does not have becomes its last day (31 Jan -> 28 Feb). */
+  sameDayIn: function (date, month) {
+    var day = Math.min(Number(date.slice(8, 10)), Util.daysInMonth(month));
+    return month + '-' + (day < 10 ? '0' : '') + day;
+  },
+
   /** Short Thai month name, e.g. 2026-10 -> ต.ค. */
   monthShort: function (month) {
     return Util.MONTHS_TH[Number(month.slice(5, 7)) - 1];

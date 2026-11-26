@@ -31,7 +31,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.p
 const text = (page, sel) => page.locator(sel).first().innerText();
 
 (async () => {
-  const { server, url } = await startServer({ port: 0 });
+  const { server, gas, url } = await startServer({ port: 0 });
   const browser = await chromium.launch();
   const results = [];
   const step = async (name, fn) => {
@@ -283,11 +283,149 @@ const text = (page, sel) => page.locator(sel).first().innerText();
     await shot(desk, 'desktop-families');
   });
 
+  /* ---------- copy items from another month ---------- */
+  // last month's recurring bills, recorded straight in the fake Sheet (the steps above never touch September)
+  const sukjai = gas.request('state', {}, 'por@gmail.com').data.state.families.find((f) => f.name === 'บ้านสุขใจ').id;
+  const sukjaiState = gas.request('state', { view: { familyId: sukjai } }, 'por@gmail.com').data.state;
+  const cat = (n) => sukjaiState.family.categories.find((c) => c.name === n).id;
+  const maeId = sukjaiState.family.members.find((m) => m.name === 'แม่').userId;
+  const addSep = (name, amount, date, category, ownerId) => {
+    const res = gas.request('item.save', { familyId: sukjai, name, amount, date, categoryId: cat(category), ownerId, view: { familyId: sukjai } }, 'por@gmail.com');
+    assert.equal(res.ok, true, name);
+  };
+  addSep('ค่าเช่าบ้าน', 8000, '2026-09-05', 'บ้านและสาธารณูปโภค', sukjaiState.me.id);
+  addSep('ค่าเช่าห้องแถว', 4500, '2026-09-24', 'รายได้เสริม', sukjaiState.me.id);
+  addSep('ค่าอินเทอร์เน็ต', 599, '2026-09-28', 'บ้านและสาธารณูปโภค', sukjaiState.me.id); // October already has this one
+  addSep('ค่าโทรศัพท์', 399, '2026-09-30', 'บ้านและสาธารณูปโภค', maeId);
+  await desk.reload();
+  await desk.waitForSelector('.main');
+  const importBtn = (page) => page.getByRole('button', { name: 'นำเข้าจากเดือนอื่น' });
+  const checked = (page) => page.locator('.pick input:checked').count();
+
+  await step('desktop: import dialog lists the month, ticks what is new, unticks what is already there', async () => {
+    await desk.locator('.pill', { hasText: 'รายการ' }).click();
+    const kpiBefore = await desk.evaluate(() => null); // totals are compared on the dashboard below
+    assert.equal(kpiBefore, null);
+    await importBtn(desk).click();
+    const dlg = desk.getByRole('dialog');
+    await dlg.waitFor();
+    await desk.locator('.pick').first().waitFor();
+    assert.match(await text(desk, '[role=dialog] h2'), /นำเข้ารายการจากเดือนอื่น/);
+    assert.match(await text(desk, '[role=dialog] .dlg-b > p'), /มาไว้ในเดือน ต\.ค\. 2569/);
+    assert.equal(await desk.locator('#f-month option:checked').innerText(), 'ก.ย. 2569 · 5 รายการ', 'starts from the month before');
+    assert.equal(await desk.locator('.pick').count(), 5);
+    assert.equal(await checked(desk), 4, 'the one October already has is not ticked');
+    const net = desk.locator('.pick', { hasText: 'ค่าอินเทอร์เน็ต' });
+    assert.equal(await net.locator('input').isChecked(), false);
+    assert.match(await net.innerText(), /มีในเดือนนี้แล้ว/);
+    assert.match(await desk.locator('.pick', { hasText: 'ค่าเช่าบ้าน' }).innerText(), /5\sก\.ย\.\s→\s5\sต\.ค\.[\s\S]*-8,000/);
+    assert.equal(await desk.locator('.picks-h .n').innerText(), 'เลือกแล้ว 4 จาก 5 รายการ');
+    assert.equal(await desk.locator('.foot .btn:not(.ghost)').innerText(), 'นำเข้า 4 รายการ');
+    assert.equal(await desk.locator('#f-statusId option:checked').innerText(), 'รอดำเนินการ (ไม่นับในยอดสรุป)', 'copies start as still to do');
+    assert.match(await text(desk, '#f-statusId-h'), /ไม่นับรวมในยอดสรุป รายการจะยังไม่ถูกบวก/);
+    await desk.locator('#f-statusId').selectOption({ label: 'ชำระแล้ว' });
+    assert.match(await text(desk, '#f-statusId-h'), /นับรวมในยอดสรุป รายการที่นำเข้าจะถูกบวก/);
+    await desk.locator('#f-statusId').selectOption({ label: 'รอดำเนินการ (ไม่นับในยอดสรุป)' });
+    await shot(desk, 'desktop-import');
+  });
+
+  await step('desktop: ticking one by one and "select all / none" keep the count and the button in step', async () => {
+    await desk.locator('.pick', { hasText: 'ค่าโทรศัพท์' }).locator('input').uncheck();
+    assert.equal(await desk.locator('.foot .btn:not(.ghost)').innerText(), 'นำเข้า 3 รายการ');
+    await desk.locator('.picks-h .act').click(); // เลือกทั้งหมด
+    assert.equal(await checked(desk), 5);
+    assert.equal(await desk.locator('.picks-h .act').innerText(), 'ไม่เลือกเลย');
+    await desk.locator('.picks-h .act').click();
+    assert.equal(await checked(desk), 0);
+    assert.equal(await desk.locator('.foot .btn:not(.ghost)').isDisabled(), true, 'nothing ticked, nothing to import');
+    assert.equal(await desk.locator('.foot .btn:not(.ghost)').innerText(), 'นำเข้า');
+    for (const name of ['ค่าเช่าบ้าน', 'ค่าเช่าห้องแถว', 'ค่าอินเทอร์เน็ต']) await desk.locator('.pick', { hasText: name }).locator('input').check();
+    assert.equal(await desk.locator('.picks-h .n').innerText(), 'เลือกแล้ว 3 จาก 5 รายการ');
+  });
+
+  await step('desktop: importing adds the ticked items to October, still to do, and the totals stay as they were', async () => {
+    await desk.keyboard.press('Escape');
+    await desk.locator('.pill', { hasText: 'ภาพรวม' }).click();
+    const kpisBefore = await text(desk, '.kpis');
+    await desk.locator('.pill', { hasText: 'รายการ' }).click();
+    const countBefore = await desk.locator('.list .item').count();
+    await importBtn(desk).click();
+    await desk.locator('.pick').first().waitFor();
+    await desk.locator('.pick', { hasText: 'ค่าโทรศัพท์' }).locator('input').uncheck();
+    await desk.locator('.foot .btn:not(.ghost)').click();
+    await desk.getByRole('dialog').waitFor({ state: 'detached' });
+    assert.match(await text(desk, '#toast'), /นำเข้า 3 รายการจาก ก\.ย\. 2569 แล้ว · สถานะ “รอดำเนินการ” ยังไม่นับในยอดสรุป/);
+    assert.equal(await desk.locator('.list .item').count(), countBefore + 3);
+    const rent = desk.locator('.list .item', { hasText: 'ค่าเช่าบ้าน' });
+    assert.match(await rent.innerText(), /บ้านและสาธารณูปโภค · พ่อ · 5 ต\.ค\.[\s\S]*รอดำเนินการ[\s\S]*-8,000/);
+    assert.match(await desk.locator('.list .item', { hasText: 'ค่าเช่าห้องแถว' }).first().innerText(), /24 ต\.ค\.[\s\S]*\+4,500/);
+    assert.equal(await desk.locator('.list .item', { hasText: 'ค่าโทรศัพท์' }).count(), 0, 'the one left unticked was not copied');
+    await shot(desk, 'desktop-import-done');
+    await desk.locator('.pill', { hasText: 'ภาพรวม' }).click();
+    assert.equal(await text(desk, '.kpis'), kpisBefore, 'pending copies are not in the totals');
+    assert.match(await text(desk, '.scope'), /ไม่รวม \d+ รายการในเดือนนี้ \(รอดำเนินการ \d+/);
+  });
+
+  await step('desktop: importing again flags what was copied and leaves only the untouched one ticked; Escape returns focus', async () => {
+    await desk.locator('.pill', { hasText: 'รายการ' }).click();
+    await importBtn(desk).click();
+    await desk.locator('.pick').first().waitFor();
+    assert.equal(await checked(desk), 1);
+    assert.equal(await desk.locator('.pick', { hasText: 'ค่าโทรศัพท์' }).locator('input').isChecked(), true);
+    assert.equal(await desk.locator('.pick', { hasText: 'มีในเดือนนี้แล้ว' }).count(), 4);
+    await desk.keyboard.press('Escape');
+    await desk.getByRole('dialog').waitFor({ state: 'detached' });
+    assert.equal(await desk.evaluate(() => document.activeElement.textContent), 'นำเข้าจากเดือนอื่น');
+  });
+
+  await step('desktop: an empty month offers the import next to "add", and starts from the nearest earlier month', async () => {
+    await desk.getByRole('button', { name: 'เดือนถัดไป' }).click();
+    await desk.waitForFunction(() => document.querySelector('.stepper b').textContent === 'พ.ย. 2569');
+    assert.deepEqual(await desk.locator('.empty .btn').allInnerTexts(), ['+ เพิ่มรายการ', 'นำเข้าจากเดือนอื่น']);
+    await desk.locator('.empty .btn.ghost').click();
+    await desk.locator('.pick').first().waitFor();
+    assert.match(await desk.locator('#f-month option:checked').innerText(), /^ต\.ค\. 2569 · \d+ รายการ$/);
+    assert.match(await text(desk, '[role=dialog] .dlg-b > p'), /มาไว้ในเดือน พ\.ย\. 2569/);
+    assert.match(await desk.locator('.pick', { hasText: 'ค่าเช่าบ้าน' }).first().innerText(), /5\sต\.ค\.\s→\s5\sพ\.ย\./);
+    await shot(desk, 'desktop-import-empty-month');
+    await desk.keyboard.press('Escape');
+    await desk.locator('.pill', { hasText: 'ภาพรวม' }).click();
+    assert.equal(await importBtn(desk).count(), 1, 'the dashboard of an empty month offers it too');
+    await desk.getByRole('button', { name: 'เดือนก่อนหน้า' }).click();
+    await desk.waitForFunction(() => document.querySelector('.stepper b').textContent === 'ต.ค. 2569');
+  });
+
+  await step('phone: the import dialog is a bottom sheet whose list scrolls on its own, with the button in reach', async () => {
+    await phone.reload();
+    await phone.waitForSelector('.main');
+    await phone.locator('.tabs .tab', { hasText: 'รายการ' }).click();
+    await importBtn(phone).click();
+    const dlg = phone.getByRole('dialog');
+    await dlg.waitFor();
+    await phone.locator('.pick').first().waitFor();
+    await phone.waitForTimeout(350);
+    const b = await dlg.boundingBox();
+    assert.ok(Math.abs(b.y + b.height - PHONE.height) < 2 && b.width === PHONE.width, 'docked to the bottom, full width ' + JSON.stringify(b));
+    // the tick boxes are 24px but sit inside a whole-row label, which is the real target (checked below)
+    const small = await phone.evaluate(() => Array.from(document.querySelectorAll('[role=dialog] button, [role=dialog] select'))
+      .filter((n) => n.offsetParent !== null)
+      .map((n) => ({ n: (n.getAttribute('aria-label') || n.textContent || n.id).trim().slice(0, 20), h: n.getBoundingClientRect().height }))
+      .filter((x) => x.h < 43.5));
+    assert.deepEqual(small, [], 'buttons and selects are at least 44px tall');
+    const rows = await phone.locator('.pick').evaluateAll((n) => n.map((r) => r.getBoundingClientRect().height));
+    assert.ok(rows.every((h) => h >= 56), 'every row is a comfortable tap target: ' + rows);
+    const over = await phone.evaluate(() => { const d = document.querySelector('[role=dialog]'); return d.scrollWidth - d.clientWidth; });
+    assert.ok(over <= 0, `dialog scrolls sideways by ${over}px`);
+    await shot(phone, 'phone-import');
+    await phone.keyboard.press('Escape');
+  });
+
   /* ---------- roles and access ---------- */
   await step('viewer: reads everything, no add / edit / delete anywhere', async () => {
     for (const tab of ['รายการ', 'ประเภท', 'หมวดหมู่', 'สถานะ', 'ผู้ใช้']) {
       await viewer.locator('.pill', { hasText: tab }).click();
       assert.equal(await viewer.getByRole('button', { name: /^\+ เพิ่ม/ }).count(), 0, tab);
+      assert.equal(await viewer.getByRole('button', { name: 'นำเข้าจากเดือนอื่น' }).count(), 0, tab + ' (nothing to import for a viewer)');
       assert.equal(await viewer.locator('.act').count(), tab === 'ผู้ใช้' ? 1 : 0, tab + ' (ผู้ใช้: only renaming yourself)');
     }
   });

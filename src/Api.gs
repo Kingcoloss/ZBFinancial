@@ -10,6 +10,8 @@ var Api = {
     'state': { write: false, run: function () { return null; } },
     'item.save': { write: true, run: function (me, p) { return Items.save(me, p); } },
     'item.status': { write: true, run: function (me, p) { return Items.setStatus(me, p); } },
+    'item.source': { write: false, run: function (me, p) { return Items.source(me, p); } },
+    'item.import': { write: true, run: function (me, p) { return Items.importMonth(me, p); } },
     'item.remove': { write: true, run: function (me, p) { return Items.remove(me, p); } },
     'category.save': { write: true, run: function (me, p) { return Categories.save(me, p); } },
     'category.remove': { write: true, run: function (me, p) { return Categories.remove(me, p); } },

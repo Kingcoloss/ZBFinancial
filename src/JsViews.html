@@ -159,7 +159,7 @@
         el('h2', {}, 'รายการล่าสุด'),
         recent.length
           ? recent.map((i) => rowView(Object.assign(itemTitle(i), { id: i.id, status: statusTag(i), amt: KIND[i.kind].sign + baht(i.amount), amtCls: KIND[i.kind].cls + (i.counted ? '' : ' off') })))
-          : emptyBlock('ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย', f.can.addItem && { label: '+ เพิ่มรายการ', run: () => ZB.forms.add('items') }),
+          : emptyBlock('ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย', f.can.addItem && { label: '+ เพิ่มรายการ', run: () => ZB.forms.add('items') }, importAction(f)),
         recent.length > 0 && el('div', { class: 'empty', style: { padding: '8px' } },
           el('button', { class: 'act', onClick: () => go('items') }, 'ดูรายการทั้งหมด'))),
       sourceNote(d)
@@ -185,8 +185,16 @@
       d.meta.sheetUrl && el('a', { href: d.meta.sheetUrl, target: '_blank', rel: 'noopener noreferrer' }, 'เปิดดูข้อมูลดิบใน Google Sheet'));
   }
 
-  function emptyBlock(text, action) {
-    return el('div', { class: 'empty' }, el('p', {}, text), action && el('button', { class: 'btn', onClick: action.run }, action.label));
+  /** An empty list: what is missing, then what to do about it. The first action is the main one. */
+  function emptyBlock(text, ...actions) {
+    return el('div', { class: 'empty' }, el('p', {}, text),
+      actions.filter(Boolean).map((a, k) => el('button', { class: 'btn' + (k ? ' ghost' : ''), 'data-fk': a.fk, onClick: a.run }, a.label)));
+  }
+
+  /** Copying items from another month: offered to people who can record items, once some other month has items. */
+  function importAction(f) {
+    const other = f.itemMonths.some((m) => m.month !== S.data.meta.month);
+    return f.can.addItem && other ? { label: 'นำเข้าจากเดือนอื่น', fk: 'import', run: () => ZB.forms.importItems() } : null;
   }
 
   /* ---- list modules ---- */
@@ -205,6 +213,7 @@
         hint: 'รายรับรายจ่ายแต่ละครั้ง มีเจ้าของเป็นผู้ใช้หนึ่งคน · แสดงเดือน ' + month + ' (' +
           (shown.length === f.items.length ? f.items.length + ' รายการ' : shown.length + ' จาก ' + f.items.length + ' รายการ') + ')',
         add: can.addItem && '+ เพิ่มรายการ',
+        secondary: importAction(f),
         empty: f.items.length ? 'ไม่มีรายการสถานะ “' + filterName(f) + '” ในเดือนนี้' : 'ยังไม่มีรายการในเดือนนี้ เริ่มบันทึกรายการแรกได้เลย',
         emptyAction: f.items.length ? { label: 'ดูทุกสถานะ', run: () => setFilter('all') } : null,
         filters: statusChips(f),
@@ -322,10 +331,11 @@
         el('div', {}, el('h1', {}, m.title), el('p', {}, m.hint)),
         el('div', { class: 'tools' },
           !m.noMonth && stepper(),
+          m.secondary && el('button', { class: 'btn ghost', 'data-fk': m.secondary.fk, onClick: m.secondary.run }, m.secondary.label),
           m.add && el('button', { class: 'btn', 'data-fk': 'add', onClick: () => ZB.forms.add(S.tab) }, m.add))),
       m.filters,
       el('section', { class: 'card list', 'aria-label': m.title },
-        m.rows.length ? m.rows.map(rowView) : emptyBlock(m.empty, own))
+        m.rows.length ? m.rows.map(rowView) : emptyBlock(m.empty, own, d.family.items.length === 0 && m.secondary))
     ];
   }
 
